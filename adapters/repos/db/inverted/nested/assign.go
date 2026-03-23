@@ -23,11 +23,13 @@ import (
 // PositionedValue represents a leaf value discovered during position
 // assignment. Positions have docID=0; the caller ORs in the real docID.
 type PositionedValue struct {
-	Path         string          // dot-notation path, e.g. "addresses.city"
-	Value        any             // raw value (caller analyzes based on DataType)
-	DataType     schema.DataType // scalar data type for value analysis
-	Tokenization string          // tokenization strategy (for text types)
-	Positions    []uint64        // encoded positions with docID=0
+	Path         string                     // dot-notation path, e.g. "addresses.city"
+	PropName     string                     // leaf property name, e.g. "city"
+	Value        any                        // raw value (caller analyzes based on DataType)
+	DataType     schema.DataType            // scalar data type for value analysis
+	Tokenization string                     // tokenization strategy (for text types)
+	TextAnalyzer *models.TextAnalyzerConfig // custom text analyzer config (may be nil)
+	Positions    []uint64                   // encoded positions with docID=0
 }
 
 // IdxEntry records which positions belong to a specific array element.
@@ -209,9 +211,11 @@ func (w *walker) walkObject(prefix string, obj map[string]any,
 		if !schema.IsNested(dt) && !schema.IsScalarArrayType(dt) {
 			w.result.Values = append(w.result.Values, PositionedValue{
 				Path:         path,
+				PropName:     np.Name,
 				Value:        val,
 				DataType:     dt,
 				Tokenization: np.Tokenization,
+				TextAnalyzer: np.TextAnalyzer,
 				Positions:    elementPositions,
 			})
 			w.result.Exists = append(w.result.Exists, ExistsEntry{
@@ -294,9 +298,11 @@ func (w *walker) walkScalarArray(path string, dt schema.DataType,
 		positions := []uint64{pos}
 		w.result.Values = append(w.result.Values, PositionedValue{
 			Path:         path,
+			PropName:     np.Name,
 			Value:        elem,
 			DataType:     scalarDT,
 			Tokenization: np.Tokenization,
+			TextAnalyzer: np.TextAnalyzer,
 			Positions:    positions,
 		})
 		w.result.Idx = append(w.result.Idx, IdxEntry{
