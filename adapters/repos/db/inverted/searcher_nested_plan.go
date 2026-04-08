@@ -89,14 +89,14 @@ type resolutionPlan struct {
 //  2. Multiple groups → interior maskLeafAnd; classify each group.
 //  3. Single group → classifyLeaf:
 //     a. Strip ancestor paths (pathRem == empty): their bitmaps are supersets of
-//        all siblings and are no-ops in any AND — exclude from further logic.
+//     all siblings and are no-ops in any AND — exclude from further logic.
 //     b. Binary pair where one remainder is a direct scalar at the LCA level
-//        (inherits all parent positions, superset of siblings) → directAnd
+//     (inherits all parent positions, superset of siblings) → directAnd
 //     c. No remainder passes through a sub-array → directAnd
 //     d/e. At least one remainder has a sub-array → recurse with stripped segs
-//        and LCA-level schema:
-//          · LCA is intermediate object[] → idxLoopAnd(lcaPath) with groups
-//          · LCA is plain object or root object[] → maskLeafAnd with groups
+//     and LCA-level schema:
+//     · LCA is intermediate object[] → idxLoopAnd(lcaPath) with groups
+//     · LCA is plain object or root object[] → maskLeafAnd with groups
 type resolutionPlanBuilder struct {
 	dt    schema.DataType
 	props []*models.NestedProperty
@@ -283,7 +283,6 @@ func (b *resolutionPlanBuilder) nodeTypeAndProps(
 	}
 	return dt, props
 }
-
 
 // isScalarAtLevel returns true if pathSegs is a single segment resolving to a
 // non-array, non-nested scalar property. Such a property inherits ALL leaf

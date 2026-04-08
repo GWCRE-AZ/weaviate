@@ -21,10 +21,10 @@ import (
 
 func TestEncodeDecodeRoundtrip(t *testing.T) {
 	tests := []struct {
-		name    string
-		root    uint16
-		leaf    uint16
-		docID   uint64
+		name  string
+		root  uint16
+		leaf  uint16
+		docID uint64
 	}{
 		{
 			name:  "basic values",

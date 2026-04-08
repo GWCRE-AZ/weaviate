@@ -161,8 +161,8 @@ func TestBuildResolutionPlanLeafOps(t *testing.T) {
 		//       ├── directAnd [cars.tires.width]
 		//       └── directAnd [cars.colors]
 		{
-			name:   "cars.tires.width and cars.colors (tires is sub-array of cars)",
-			pathA:  "cars.tires.width", pathB: "cars.colors", rootDT: objDT,
+			name:  "cars.tires.width and cars.colors (tires is sub-array of cars)",
+			pathA: "cars.tires.width", pathB: "cars.colors", rootDT: objDT,
 			wantOp: idxLoopAnd, wantLCA: "cars",
 		},
 		// make is scalar at cars level → superset of tires.width positions → directAnd
@@ -184,8 +184,8 @@ func TestBuildResolutionPlanLeafOps(t *testing.T) {
 		//       ├── directAnd [addresses.city]
 		//       └── directAnd [cars.make]
 		{
-			name:   "diverge at root of object[] property",
-			pathA:  "addresses.city", pathB: "cars.make", rootDT: arrDT,
+			name:  "diverge at root of object[] property",
+			pathA: "addresses.city", pathB: "cars.make", rootDT: arrDT,
 			wantOp: maskLeafAnd,
 		},
 
@@ -194,16 +194,16 @@ func TestBuildResolutionPlanLeafOps(t *testing.T) {
 		//       ├── directAnd [addresses.city]
 		//       └── directAnd [cars.make]
 		{
-			name:   "addresses.city and cars.make under single object",
-			pathA:  "addresses.city", pathB: "cars.make", rootDT: objDT,
+			name:  "addresses.city and cars.make under single object",
+			pathA: "addresses.city", pathB: "cars.make", rootDT: objDT,
 			wantOp: maskLeafAnd,
 		},
 		// → maskLeafAnd
 		//       ├── directAnd [owner.firstname]
 		//       └── directAnd [addresses.city]
 		{
-			name:   "owner.firstname and addresses.city under single object",
-			pathA:  "owner.firstname", pathB: "addresses.city", rootDT: objDT,
+			name:  "owner.firstname and addresses.city under single object",
+			pathA: "owner.firstname", pathB: "addresses.city", rootDT: objDT,
 			wantOp: maskLeafAnd,
 		},
 

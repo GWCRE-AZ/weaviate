@@ -70,7 +70,7 @@ type propValuePair struct {
 	hasFilterableIndex bool
 	hasSearchableIndex bool
 	hasRangeableIndex  bool
-	nested nestedInfo
+	nested             nestedInfo
 	Class              *models.Class // The schema
 }
 

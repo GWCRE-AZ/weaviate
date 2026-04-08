@@ -860,8 +860,8 @@ func assertDoc124(t *testing.T, schema []*models.NestedProperty) {
 	assertIdx(t, result, "tags", 2, positions(1, 6))
 	assertIdx(t, result, "cars", 0, positions(1, 7, 8, 9))
 	assertIdx(t, result, "cars", 1, positions(1, 10, 11))
-	assertIdx(t, result, "cars.tires", 0, positions(1, 7, 8, 10))  // Audi t0 {l7,l8} + Kia t0 {l10}
-	assertIdx(t, result, "cars.tires", 1, positions(1, 9))          // Audi t1 only
+	assertIdx(t, result, "cars.tires", 0, positions(1, 7, 8, 10)) // Audi t0 {l7,l8} + Kia t0 {l10}
+	assertIdx(t, result, "cars.tires", 1, positions(1, 9))        // Audi t1 only
 	assertIdx(t, result, "cars.tires.radiuses", 0, positions(1, 7))
 	assertIdx(t, result, "cars.tires.radiuses", 1, positions(1, 8))
 	assertIdx(t, result, "cars.colors", 0, positions(1, 11))
@@ -1250,22 +1250,4 @@ func assertDoc999(t *testing.T, schema []*models.NestedProperty) {
 	assertExists(t, result, "cars.accessories", positions(2, 7, 8))
 	assertExists(t, result, "cars.accessories.type", positions(2, 7, 8))
 	assertExists(t, result, "cars.colors", append(positions(1, 11), positions(2, 9)...))
-}
-
-// findAllIdx returns all IdxEntry instances for a given path and index
-// (there can be multiple when the same relative path appears under different
-// parent array elements, e.g. cars[0].tires and cars[1].tires both emit
-// _idx entries for "cars.tires" with index 0).
-// findAllIdx returns all IdxEntry instances for a given path and index
-// (there can be multiple when the same relative path appears under different
-// parent array elements, e.g. cars[0].tires and cars[1].tires both emit
-// _idx entries for "cars.tires" with index 0).
-func findAllIdx(result *AssignResult, path string, index int) []IdxEntry {
-	var out []IdxEntry
-	for _, idx := range result.Idx {
-		if idx.Path == path && idx.Index == index {
-			out = append(out, idx)
-		}
-	}
-	return out
 }

@@ -474,11 +474,11 @@ func groupNestedByProp(children []*propValuePair, class *models.Class) []*propVa
 			result = append(result, group[0])
 		} else {
 			result = append(result, &propValuePair{
-				operator:           filters.OperatorAnd,
-				nested:             nestedInfo{isCorrelated: true},
-				prop:               prop,
-				children:           group,
-				Class:              class,
+				operator: filters.OperatorAnd,
+				nested:   nestedInfo{isCorrelated: true},
+				prop:     prop,
+				children: group,
+				Class:    class,
 			})
 		}
 	}

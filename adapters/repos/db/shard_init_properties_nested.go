@@ -40,12 +40,14 @@ func (s *Shard) createNestedPropertyBuckets(ctx context.Context, prop *models.Pr
 		}
 	}
 
+	//nolint:staticcheck // intentionally empty, see comment below
 	if inverted.HasNestedSearchableIndex(prop) {
-		// TODO: create nested searchable bucket (Phase 2)
+		// TODO aliszka:nested_filtering create nested searchable bucket (Phase 2)
 	}
 
+	//nolint:staticcheck // intentionally empty, see comment below
 	if inverted.HasNestedRangeableIndex(prop) {
-		// TODO: create nested rangeable bucket (Phase 3)
+		// TODO aliszka:nested_filtering create nested rangeable bucket (Phase 3)
 	}
 
 	if inverted.HasAnyNestedInvertedIndex(prop) {

@@ -339,8 +339,9 @@ func IsScalarArrayType(dt DataType) bool {
 	case DataTypeTextArray, DataTypeIntArray, DataTypeNumberArray,
 		DataTypeBooleanArray, DataTypeDateArray, DataTypeUUIDArray:
 		return true
+	default:
+		return false
 	}
-	return false
 }
 
 func ScalarFromArrayType(dt DataType) DataType {
@@ -357,6 +358,7 @@ func ScalarFromArrayType(dt DataType) DataType {
 		return DataTypeDate
 	case DataTypeUUIDArray:
 		return DataTypeUUID
+	default:
+		return dt
 	}
-	return dt
 }

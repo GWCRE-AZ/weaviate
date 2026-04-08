@@ -303,7 +303,6 @@ func createRowReaderRoaringSet(value []byte, operator filters.Operator,
 	}
 }
 
-
 // TestRowReaderRoaringSetWithPrefix verifies that cursor-based reads stay
 // within the bounds of the supplied key prefix and do not bleed into entries
 // belonging to other prefixes stored in the same bucket.
@@ -340,47 +339,47 @@ func TestRowReaderRoaringSetWithPrefix(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name          string
-		prefix        []byte
-		value         []byte
-		operator      filters.Operator
-		expected      []kvData // bare key (no prefix) + expected docIDs
-		wantDenyList  bool
+		name         string
+		prefix       []byte
+		value        []byte
+		operator     filters.Operator
+		expected     []kvData // bare key (no prefix) + expected docIDs
+		wantDenyList bool
 	}{
 		// prefix0 — first prefix in bucket
 		// greaterThan must not bleed into prefixA; lessThan has nothing before it.
 		{
-			name: "prefix0/equal",
+			name:   "prefix0/equal",
 			prefix: prefix0, value: []byte("aaa"), operator: filters.OperatorEqual,
 			expected: []kvData{{"aaa", []uint64{901, 902}}},
 		},
 		{
-			name: "prefix0/greaterThan no bleed into prefixA",
+			name:   "prefix0/greaterThan no bleed into prefixA",
 			prefix: prefix0, value: []byte("bbb"), operator: filters.OperatorGreaterThan,
 			expected: []kvData{},
 		},
 		{
-			name: "prefix0/greaterThanEqual",
+			name:   "prefix0/greaterThanEqual",
 			prefix: prefix0, value: []byte("bbb"), operator: filters.OperatorGreaterThanEqual,
 			expected: []kvData{{"bbb", []uint64{903, 904}}},
 		},
 		{
-			name: "prefix0/lessThan nothing before first entry",
+			name:   "prefix0/lessThan nothing before first entry",
 			prefix: prefix0, value: []byte("aaa"), operator: filters.OperatorLessThan,
 			expected: []kvData{},
 		},
 		{
-			name: "prefix0/lessThan",
+			name:   "prefix0/lessThan",
 			prefix: prefix0, value: []byte("bbb"), operator: filters.OperatorLessThan,
 			expected: []kvData{{"aaa", []uint64{901, 902}}},
 		},
 		{
-			name: "prefix0/like full wildcard",
+			name:   "prefix0/like full wildcard",
 			prefix: prefix0, value: []byte("*"), operator: filters.OperatorLike,
 			expected: []kvData{{"aaa", []uint64{901, 902}}, {"bbb", []uint64{903, 904}}},
 		},
 		{
-			name: "prefix0/notEqual",
+			name:   "prefix0/notEqual",
 			prefix: prefix0, value: []byte("aaa"), operator: filters.OperatorNotEqual,
 			expected:     []kvData{{"aaa", []uint64{901, 902}}},
 			wantDenyList: true,
@@ -388,57 +387,57 @@ func TestRowReaderRoaringSetWithPrefix(t *testing.T) {
 
 		// prefixA — middle prefix, bleed possible in both directions
 		{
-			name: "prefixA/equal",
+			name:   "prefixA/equal",
 			prefix: prefixA, value: []byte("bbb"), operator: filters.OperatorEqual,
 			expected: []kvData{{"bbb", []uint64{11, 22, 33}}},
 		},
 		{
-			name: "prefixA/greaterThan stops at upper boundary",
+			name:   "prefixA/greaterThan stops at upper boundary",
 			prefix: prefixA, value: []byte("bbb"), operator: filters.OperatorGreaterThan,
 			expected: []kvData{{"ccc", []uint64{111, 222, 333}}, {"ddd", []uint64{1111, 2222, 3333}}},
 		},
 		{
-			name: "prefixA/greaterThanEqual",
+			name:   "prefixA/greaterThanEqual",
 			prefix: prefixA, value: []byte("bbb"), operator: filters.OperatorGreaterThanEqual,
 			expected: []kvData{{"bbb", []uint64{11, 22, 33}}, {"ccc", []uint64{111, 222, 333}}, {"ddd", []uint64{1111, 2222, 3333}}},
 		},
 		{
-			name: "prefixA/greaterThan last entry no bleed into prefixB",
+			name:   "prefixA/greaterThan last entry no bleed into prefixB",
 			prefix: prefixA, value: []byte("ddd"), operator: filters.OperatorGreaterThan,
 			expected: []kvData{},
 		},
 		{
-			name: "prefixA/lessThan starts at lower boundary no bleed into prefix0",
+			name:   "prefixA/lessThan starts at lower boundary no bleed into prefix0",
 			prefix: prefixA, value: []byte("ccc"), operator: filters.OperatorLessThan,
 			expected: []kvData{{"aaa", []uint64{1, 2, 3}}, {"bbb", []uint64{11, 22, 33}}},
 		},
 		{
-			name: "prefixA/lessThanEqual",
+			name:   "prefixA/lessThanEqual",
 			prefix: prefixA, value: []byte("ccc"), operator: filters.OperatorLessThanEqual,
 			expected: []kvData{{"aaa", []uint64{1, 2, 3}}, {"bbb", []uint64{11, 22, 33}}, {"ccc", []uint64{111, 222, 333}}},
 		},
 		{
-			name: "prefixA/lessThan first entry no bleed into prefix0",
+			name:   "prefixA/lessThan first entry no bleed into prefix0",
 			prefix: prefixA, value: []byte("aaa"), operator: filters.OperatorLessThan,
 			expected: []kvData{},
 		},
 		{
-			name: "prefixA/like wildcard-suffix stays within prefix",
+			name:   "prefixA/like wildcard-suffix stays within prefix",
 			prefix: prefixA, value: []byte("b*"), operator: filters.OperatorLike,
 			expected: []kvData{{"bbb", []uint64{11, 22, 33}}},
 		},
 		{
-			name: "prefixA/like wildcard-prefix stays within prefix",
+			name:   "prefixA/like wildcard-prefix stays within prefix",
 			prefix: prefixA, value: []byte("*b"), operator: filters.OperatorLike,
 			expected: []kvData{{"bbb", []uint64{11, 22, 33}}},
 		},
 		{
-			name: "prefixA/like full wildcard returns only prefixA entries",
+			name:   "prefixA/like full wildcard returns only prefixA entries",
 			prefix: prefixA, value: []byte("*"), operator: filters.OperatorLike,
 			expected: []kvData{{"aaa", []uint64{1, 2, 3}}, {"bbb", []uint64{11, 22, 33}}, {"ccc", []uint64{111, 222, 333}}, {"ddd", []uint64{1111, 2222, 3333}}},
 		},
 		{
-			name: "prefixA/notEqual",
+			name:   "prefixA/notEqual",
 			prefix: prefixA, value: []byte("bbb"), operator: filters.OperatorNotEqual,
 			expected:     []kvData{{"bbb", []uint64{11, 22, 33}}},
 			wantDenyList: true,
@@ -447,37 +446,37 @@ func TestRowReaderRoaringSetWithPrefix(t *testing.T) {
 		// prefixB — last prefix in bucket
 		// greaterThan past last entry must return nothing; lessThan must not bleed into prefixA.
 		{
-			name: "prefixB/equal",
+			name:   "prefixB/equal",
 			prefix: prefixB, value: []byte("aaa"), operator: filters.OperatorEqual,
 			expected: []kvData{{"aaa", []uint64{801, 802}}},
 		},
 		{
-			name: "prefixB/greaterThan nothing past last entry",
+			name:   "prefixB/greaterThan nothing past last entry",
 			prefix: prefixB, value: []byte("bbb"), operator: filters.OperatorGreaterThan,
 			expected: []kvData{},
 		},
 		{
-			name: "prefixB/greaterThan",
+			name:   "prefixB/greaterThan",
 			prefix: prefixB, value: []byte("aaa"), operator: filters.OperatorGreaterThan,
 			expected: []kvData{{"bbb", []uint64{803, 804}}},
 		},
 		{
-			name: "prefixB/lessThan no bleed into prefixA",
+			name:   "prefixB/lessThan no bleed into prefixA",
 			prefix: prefixB, value: []byte("aaa"), operator: filters.OperatorLessThan,
 			expected: []kvData{},
 		},
 		{
-			name: "prefixB/lessThanEqual",
+			name:   "prefixB/lessThanEqual",
 			prefix: prefixB, value: []byte("bbb"), operator: filters.OperatorLessThanEqual,
 			expected: []kvData{{"aaa", []uint64{801, 802}}, {"bbb", []uint64{803, 804}}},
 		},
 		{
-			name: "prefixB/like full wildcard returns only prefixB entries",
+			name:   "prefixB/like full wildcard returns only prefixB entries",
 			prefix: prefixB, value: []byte("*"), operator: filters.OperatorLike,
 			expected: []kvData{{"aaa", []uint64{801, 802}}, {"bbb", []uint64{803, 804}}},
 		},
 		{
-			name: "prefixB/notEqual",
+			name:   "prefixB/notEqual",
 			prefix: prefixB, value: []byte("aaa"), operator: filters.OperatorNotEqual,
 			expected:     []kvData{{"aaa", []uint64{801, 802}}},
 			wantDenyList: true,

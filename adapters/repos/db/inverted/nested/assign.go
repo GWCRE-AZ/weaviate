@@ -81,6 +81,7 @@ func AssignPositions(prop *models.Property, value any) (*AssignResult, error) {
 			return nil, fmt.Errorf("expected []any for object[] %q, got %T", prop.Name, value)
 		}
 		elements = arr
+	default:
 	}
 
 	if len(elements) == 0 {
@@ -236,6 +237,7 @@ func (w *walker) walkNestedArray(path string, dt schema.DataType,
 			return nil, fmt.Errorf("expected []any for %s, got %T", path, val)
 		}
 		elements = arr
+	default:
 	}
 
 	var allPositions []uint64

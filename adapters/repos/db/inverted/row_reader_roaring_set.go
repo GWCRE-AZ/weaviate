@@ -249,9 +249,9 @@ func (rr *RowReaderRoaringSet) like(ctx context.Context,
 	defer c.Close()
 
 	var (
-		initialK   []byte
-		initialV   *sroar.Bitmap
-		seekMin    []byte // full seek key used for the optimizable early-abort check
+		initialK []byte
+		initialV *sroar.Bitmap
+		seekMin  []byte // full seek key used for the optimizable early-abort check
 	)
 
 	if like.optimizable {
@@ -294,4 +294,3 @@ func (rr *RowReaderRoaringSet) like(ctx context.Context,
 
 	return nil
 }
-
