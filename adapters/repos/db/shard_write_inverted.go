@@ -24,6 +24,9 @@ func isPropertyForLength(dt schema.DataType) bool {
 	switch dt {
 	case schema.DataTypeInt, schema.DataTypeNumber, schema.DataTypeBoolean, schema.DataTypeDate:
 		return false
+	case schema.DataTypeObject, schema.DataTypeObjectArray:
+		// Nested types have dedicated nested buckets; no flat length bucket is created.
+		return false
 	default:
 		return true
 	}
@@ -53,9 +56,14 @@ func (s *Shard) AnalyzeObject(object *storobj.Object) ([]inverted.Property, []in
 	if s.index.invertedIndexConfig.IndexNullState {
 		for _, prop := range c.Properties {
 			dt := schema.DataType(prop.DataType[0])
-			// some datatypes are not added to the inverted index, so we can skip them here
-			if dt == schema.DataTypeGeoCoordinates || dt == schema.DataTypePhoneNumber || dt == schema.DataTypeBlob || dt == schema.DataTypeBlobHash {
+			switch dt {
+			case schema.DataTypeGeoCoordinates, schema.DataTypePhoneNumber, schema.DataTypeBlob, schema.DataTypeBlobHash:
+				// not added to the inverted index
 				continue
+			case schema.DataTypeObject, schema.DataTypeObjectArray:
+				// nested types use dedicated nested buckets — no flat null/length buckets are created for them
+				continue
+			default:
 			}
 
 			// Add props as nil props if
