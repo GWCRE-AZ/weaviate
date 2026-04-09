@@ -699,7 +699,7 @@ func assertAnalyzeDoc123(t *testing.T, analyzer *Analyzer, prop *models.Property
 	assert.Contains(t, valuePaths, "addresses.city")
 	assert.Contains(t, valuePaths, "addresses.postcode")
 
-	assert.Len(t, result.Idx, 14)
+	assert.Len(t, result.Idx, 15)
 	assert.Len(t, result.Exists, 17)
 }
 
@@ -751,7 +751,7 @@ func assertAnalyzeDoc124(t *testing.T, analyzer *Analyzer, prop *models.Property
 	assert.Equal(t, 2, valuePaths["cars.make"])
 	assert.Equal(t, 1, valuePaths["cars.colors"])
 
-	assert.Len(t, result.Idx, 16)
+	assert.Len(t, result.Idx, 17)
 	assert.Len(t, result.Exists, 23)
 }
 
@@ -794,7 +794,7 @@ func assertAnalyzeDoc125(t *testing.T, analyzer *Analyzer, prop *models.Property
 	assert.Equal(t, 1, valuePaths["cars.colors"])
 	assert.Equal(t, 1, valuePaths["cars.make"])
 
-	assert.Len(t, result.Idx, 12)
+	assert.Len(t, result.Idx, 13)
 	assert.Len(t, result.Exists, 19)
 }
 
@@ -871,7 +871,7 @@ func assertAnalyzeDoc999(t *testing.T, analyzer *Analyzer, prop *models.Property
 	assert.Equal(t, 2, valuePaths["cars.colors"])
 	assert.Equal(t, 2, valuePaths["cars.accessories.type"])
 
-	assert.Len(t, result.Idx, 28)
+	assert.Len(t, result.Idx, 30)
 	assert.Len(t, result.Exists, 41)
 }
 
