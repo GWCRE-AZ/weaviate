@@ -18,6 +18,7 @@ import (
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/adapters/repos/db/inverted/stopwords"
 	"github.com/weaviate/weaviate/entities/filters"
 	filnested "github.com/weaviate/weaviate/entities/filters/nested"
 	"github.com/weaviate/weaviate/entities/models"
@@ -70,7 +71,7 @@ func newTestSearcher() *Searcher {
 	logger, _ := test.NewNullLogger()
 	return &Searcher{
 		getClass:               func(name string) *models.Class { return class },
-		stopwords:              fakeStopwordDetector{},
+		stopwordProvider:       stopwords.NewProvider(fakeStopwordDetector{}, nil),
 		isFallbackToSearchable: func() bool { return false },
 		logger:                 logger,
 	}

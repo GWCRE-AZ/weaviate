@@ -71,7 +71,7 @@ func (s *Searcher) buildNestedFilterPair(filter *filters.Clause, propName, fullP
 	dt := schema.DataType(leaf.DataType[0])
 	switch dt {
 	case schema.DataTypeText, schema.DataTypeTextArray:
-		return s.buildNestedTextFilterPair(filter, propName, fullPath, relPath, leaf.Tokenization, arrayIndices, class)
+		return s.buildNestedTextFilterPair(filter, propName, fullPath, relPath, leaf, arrayIndices, class)
 	default:
 		return s.buildNestedPrimitiveFilterPair(filter, propName, fullPath, relPath, dt, arrayIndices, class)
 	}
@@ -80,8 +80,12 @@ func (s *Searcher) buildNestedFilterPair(filter *filters.Clause, propName, fullP
 // buildNestedTextFilterPair handles tokenizable text properties. Multiple
 // tokens produce multiple propValuePairs combined with AND, mirroring
 // extractTokenizableProp for flat properties.
-func (s *Searcher) buildNestedTextFilterPair(filter *filters.Clause, propName, fullPath, relPath, tokenization string,
-	arrayIndices []filnested.ArrayIndex, class *models.Class,
+//
+// TODO aliszka:nested_filtering the tokenization pipeline here (stopwords,
+// ASCII folding, wildcard handling) was aligned with extractTokenizableProp
+// manually. Consider extracting a shared helper to avoid future divergence.
+func (s *Searcher) buildNestedTextFilterPair(filter *filters.Clause, propName, fullPath, relPath string,
+	leaf *models.NestedProperty, arrayIndices []filnested.ArrayIndex, class *models.Class,
 ) (*propValuePair, error) {
 	valueStr, ok := filter.Value.Value.(string)
 	if !ok {
@@ -90,16 +94,28 @@ func (s *Searcher) buildNestedTextFilterPair(filter *filters.Clause, propName, f
 
 	var terms []string
 	if filter.Operator == filters.OperatorLike {
-		terms = tokenizer.TokenizeWithWildcardsForClass(tokenization, valueStr, class.Class)
+		text := valueStr
+		if leaf.TextAnalyzer != nil && leaf.TextAnalyzer.ASCIIFold {
+			ignore := tokenizer.BuildIgnoreSet(leaf.TextAnalyzer.ASCIIFoldIgnore)
+			text = tokenizer.FoldASCII(text, ignore)
+		}
+		terms = tokenizer.TokenizeWithWildcardsForClass(leaf.Tokenization, text, class.Class)
 	} else {
-		terms = tokenizer.TokenizeForClass(tokenization, valueStr, class.Class)
+		var sw tokenizer.StopwordDetector
+		if leaf.Tokenization == models.PropertyTokenizationWord {
+			d, err := s.stopwordProvider.GetForNested(leaf)
+			if err != nil {
+				return nil, fmt.Errorf("nested path %q: get stopwords: %w", fullPath, err)
+			}
+			sw = d
+		}
+		prepared := tokenizer.NewPreparedAnalyzer(leaf.TextAnalyzer)
+		result := tokenizer.Analyze(valueStr, leaf.Tokenization, class.Class, prepared, sw)
+		terms = result.Query
 	}
 
 	pvps := make([]*propValuePair, 0, len(terms))
 	for _, term := range terms {
-		if s.stopwords.IsStopword(term) {
-			continue
-		}
 		pvps = append(pvps, &propValuePair{
 			prop:               propName,
 			value:              []byte(term),

@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/weaviate/weaviate/adapters/repos/db/helpers"
 	invnested "github.com/weaviate/weaviate/adapters/repos/db/inverted/nested"
+	"github.com/weaviate/weaviate/adapters/repos/db/inverted/stopwords"
 	"github.com/weaviate/weaviate/adapters/repos/db/lsmkv"
 	"github.com/weaviate/weaviate/adapters/repos/db/roaringset"
 	"github.com/weaviate/weaviate/entities/cyclemanager"
@@ -105,7 +106,7 @@ func newNestedTestSearcher(t *testing.T, bucketNames ...string) (*Searcher, *lsm
 
 	class := correlationTestClass()
 	searcher := NewSearcher(logger, store, func(string) *models.Class { return class },
-		nil, nil, fakeStopwordDetector{}, 2,
+		nil, nil, stopwords.NewProvider(fakeStopwordDetector{}, nil), 2,
 		func() bool { return false }, "",
 		config.DefaultQueryNestedCrossReferenceLimit, bitmapFactory)
 
@@ -2428,7 +2429,7 @@ func newSearcherForClass(t *testing.T, class *models.Class, bucketNames ...strin
 	bitmapFactory := roaringset.NewBitmapFactory(
 		roaringset.NewBitmapBufPoolNoop(), func() uint64 { return 1_000_000 })
 	searcher := NewSearcher(logger, store, func(string) *models.Class { return class },
-		nil, nil, fakeStopwordDetector{}, 2,
+		nil, nil, stopwords.NewProvider(fakeStopwordDetector{}, nil), 2,
 		func() bool { return false }, "",
 		config.DefaultQueryNestedCrossReferenceLimit, bitmapFactory)
 	return searcher, store
