@@ -143,6 +143,28 @@ func TestOrDocIDMasksDocID(t *testing.T) {
 	assert.Equal(t, uint64(0), DecodeDocID(result[0]))
 }
 
+func TestEncodeOutOfRangeClipped(t *testing.T) {
+	// leafIdx with upper bits set would shift into the root field without
+	// masking. Using MaxLeavesPerRoot+5 (clips to 5) proves the lower bits are
+	// preserved and the overflow bits are dropped, not that the result is zero.
+	oversizedLeaf := uint16(MaxLeavesPerRoot + 5) // clips to 5
+	encoded := Encode(1, oversizedLeaf, 0)
+	assert.Equal(t, uint16(1), DecodeRootIdx(encoded), "oversized leafIdx must not bleed into root field")
+	assert.Equal(t, uint16(5), DecodeLeafIdx(encoded), "oversized leafIdx lower bits are preserved")
+
+	// rootIdx with upper bits set is clipped; lower bits must not spill into
+	// leaf. Using MaxRoots+3 (clips to 3) proves the same.
+	oversizedRoot := uint16(MaxRoots + 3) // clips to 3
+	encoded2 := Encode(oversizedRoot, 1, 0)
+	assert.Equal(t, uint16(3), DecodeRootIdx(encoded2), "oversized rootIdx lower bits are preserved")
+	assert.Equal(t, uint16(1), DecodeLeafIdx(encoded2), "oversized rootIdx must not bleed into leaf field")
+
+	// Both oversized simultaneously: each field clips independently.
+	encoded3 := Encode(oversizedRoot, oversizedLeaf, 0)
+	assert.Equal(t, uint16(3), DecodeRootIdx(encoded3), "oversized rootIdx lower bits are preserved")
+	assert.Equal(t, uint16(5), DecodeLeafIdx(encoded3), "oversized leafIdx lower bits are preserved")
+}
+
 func TestValidateRootIdx(t *testing.T) {
 	assert.NoError(t, ValidateRootIdx(1))
 	assert.NoError(t, ValidateRootIdx(MaxRoots-1))

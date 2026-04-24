@@ -49,16 +49,18 @@ const (
 	// zeroLeafBits zeroes leaf bits (49-36), keeping root+docID.
 	zeroLeafBits = ^(uint64(leafMask) << leafShift)
 
-	MaxRoots         = 1 << rootBits
-	MaxLeavesPerRoot = 1 << leafBits
-	MaxDocID         = (1 << docBits) - 1
+	MaxRoots         = 1 << rootBits      // 16384
+	MaxLeavesPerRoot = 1 << leafBits      // 16384
+	MaxDocID         = (1 << docBits) - 1 // 68719476735; 68.7B
 )
 
 // Encode packs root index, leaf index, and document ID into a single uint64
 // position value. Root and leaf indices are 1-based (0 is reserved/invalid).
+// All three fields are masked to their declared widths (rootMask, leafMask,
+// docMask) before packing, so out-of-range inputs are silently clipped.
 func Encode(rootIdx, leafIdx uint16, docID uint64) uint64 {
-	return (uint64(rootIdx) << rootShift) |
-		(uint64(leafIdx) << leafShift) |
+	return (uint64(rootIdx)&rootMask)<<rootShift |
+		(uint64(leafIdx)&leafMask)<<leafShift |
 		(docID & docMask)
 }
 

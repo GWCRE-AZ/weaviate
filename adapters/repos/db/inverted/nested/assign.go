@@ -80,6 +80,9 @@ func AssignPositions(prop *models.Property, value any) (*AssignResult, error) {
 		}
 		elements = arr
 	default:
+		// Unreachable: dt is returned by AsNested which only returns members of
+		// NestedDataTypes (DataTypeObject, DataTypeObjectArray).
+		return nil, fmt.Errorf("property %q has unexpected data type %q", prop.Name, dt)
 	}
 
 	if len(elements) == 0 {
@@ -90,11 +93,11 @@ func AssignPositions(prop *models.Property, value any) (*AssignResult, error) {
 	var allPositions []uint64
 
 	for i, elem := range elements {
-		rootIdx := uint16(i + 1)
-		if int(rootIdx) >= MaxRoots {
+		if i+1 >= MaxRoots {
 			return nil, fmt.Errorf("element count %d exceeds maximum %d for property %q",
 				i+1, MaxRoots-1, prop.Name)
 		}
+		rootIdx := uint16(i + 1)
 
 		elemMap, ok := elem.(map[string]any)
 		if !ok {
@@ -125,6 +128,7 @@ func AssignPositions(prop *models.Property, value any) (*AssignResult, error) {
 	return result, nil
 }
 
+// walker is not goroutine-safe; each call to AssignPositions must use its own instance.
 type walker struct {
 	rootIdx uint16
 	leafIdx uint16
@@ -234,6 +238,9 @@ func (w *walker) walkNestedArray(path string, dt schema.DataType,
 		}
 		elements = arr
 	default:
+		// Unreachable: walkNestedArray is only called when IsNested(dt) is true,
+		// which only holds for DataTypeObject and DataTypeObjectArray.
+		return nil, fmt.Errorf("unexpected data type %q at path %q", dt, path)
 	}
 
 	var allPositions []uint64
