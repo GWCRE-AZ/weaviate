@@ -74,6 +74,11 @@ func (a *Analyzer) analyzeProps(propsMap map[string]*models.Property,
 		}
 
 		if _, ok := schema.AsNested(prop.DataType); ok {
+			// TODO aliszka:nested_filtering respect top-level indexFilterable/
+			// indexSearchable/indexRangeable settings for nested properties. Currently
+			// these are ignored — the nested write path bypasses HasAnyInvertedIndex
+			// and always indexes. The interaction between the top-level setting and
+			// per-nested-property settings needs design discussion before implementing.
 			nr, err := a.analyzeNestedProp(prop, input[key])
 			if err != nil {
 				return nil, nil, fmt.Errorf("analyze nested prop %q: %w", key, err)
@@ -242,7 +247,7 @@ func (a *Analyzer) analyzeArrayProp(prop *models.Property, values []any) (*Prope
 		return nil, nil
 	}
 
-	var items []Countable
+	items := make([]Countable, 0, len(values))
 	for _, value := range values {
 		analyzed, err := a.analyzeValue(scalarDT, "", "", nil, value)
 		if err != nil {

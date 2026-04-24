@@ -13,7 +13,9 @@ package nested
 
 import (
 	"fmt"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/weaviate/weaviate/entities/models"
 	"github.com/weaviate/weaviate/entities/schema"
 )
@@ -306,8 +308,14 @@ func (w *walker) walkScalarArray(path string, dt schema.DataType,
 		return nil
 	}
 
-	// Iterate directly over the concrete slice type — handles both the original
-	// []any form and typed slices produced by JSON round-trips ([]string etc.).
+	// Iterate directly over the concrete slice type. Values arrive in different
+	// forms depending on the write path:
+	//   - API/JSON path: enrichSchemaTypes converts []interface{} to []string,
+	//     []float64, or []bool based on the element type.
+	//   - Internal paths (e.g. direct programmatic insertion without a JSON
+	//     round-trip) may produce []int, []time.Time, or []uuid.UUID.
+	// All cases are handled defensively so that walkScalarArray remains correct
+	// regardless of how the caller obtained the value.
 	switch v := val.(type) {
 	case []any:
 		for i, elem := range v {
@@ -328,6 +336,24 @@ func (w *walker) walkScalarArray(path string, dt schema.DataType,
 			}
 		}
 	case []bool:
+		for i, elem := range v {
+			if err := appendElem(i, elem); err != nil {
+				return nil, err
+			}
+		}
+	case []int:
+		for i, elem := range v {
+			if err := appendElem(i, elem); err != nil {
+				return nil, err
+			}
+		}
+	case []time.Time:
+		for i, elem := range v {
+			if err := appendElem(i, elem); err != nil {
+				return nil, err
+			}
+		}
+	case []uuid.UUID:
 		for i, elem := range v {
 			if err := appendElem(i, elem); err != nil {
 				return nil, err
