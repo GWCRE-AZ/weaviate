@@ -524,6 +524,53 @@ func TestAnalyzeNestedProp(t *testing.T) {
 		assert.Nil(t, result)
 	})
 
+	// When all descendant properties have every index disabled, analyzeNestedProp
+	// must return nil — no buckets are created for such a property, so returning
+	// a non-nil NestedProperty would cause extendNestedMetaIndex to hit a nil bucket.
+	// Verified for both object and object[] top-level types.
+	t.Run("all indexes disabled returns nil for object", func(t *testing.T) {
+		prop := &models.Property{
+			Name:     "nested",
+			DataType: schema.DataTypeObject.PropString(),
+			NestedProperties: []*models.NestedProperty{
+				{
+					Name:              "city",
+					DataType:          schema.DataTypeText.PropString(),
+					IndexFilterable:   boolPtr(false),
+					IndexSearchable:   boolPtr(false),
+					IndexRangeFilters: boolPtr(false),
+				},
+			},
+		}
+
+		result, err := analyzer.analyzeNestedProp(prop, map[string]any{"city": "Berlin"})
+		require.NoError(t, err)
+		assert.Nil(t, result)
+	})
+
+	t.Run("all indexes disabled returns nil for object array", func(t *testing.T) {
+		prop := &models.Property{
+			Name:     "nested",
+			DataType: schema.DataTypeObjectArray.PropString(),
+			NestedProperties: []*models.NestedProperty{
+				{
+					Name:              "city",
+					DataType:          schema.DataTypeText.PropString(),
+					IndexFilterable:   boolPtr(false),
+					IndexSearchable:   boolPtr(false),
+					IndexRangeFilters: boolPtr(false),
+				},
+			},
+		}
+
+		result, err := analyzer.analyzeNestedProp(prop, []any{
+			map[string]any{"city": "Berlin"},
+			map[string]any{"city": "Hamburg"},
+		})
+		require.NoError(t, err)
+		assert.Nil(t, result)
+	})
+
 	// Full design document tests using the shared schema from the design summary.
 	// Each test runs with both full shared schema and minimal per-document schema
 	// to verify that appending new sub-properties to the schema doesn't change

@@ -155,11 +155,20 @@ func (a *Analyzer) analyzeNestedProp(prop *models.Property, value any) (*NestedP
 		return nil, nil
 	}
 
+	// Skip analysis entirely when no descendant has any index enabled — no
+	// buckets were created for this property, so writing would hit a nil bucket.
+	if !HasAnyNestedInvertedIndex(prop) {
+		return nil, nil
+	}
+
 	assignResult, err := nested.AssignPositions(prop, value)
 	if err != nil {
 		return nil, err
 	}
 
+	// Only reachable for DataTypeObjectArray with an empty array value: AssignPositions
+	// returns early before appending the root _exists entry, leaving all slices empty.
+	// DataTypeObject always wraps the value in a 1-element slice so this cannot fire.
 	if len(assignResult.Values) == 0 && len(assignResult.Idx) == 0 && len(assignResult.Exists) == 0 {
 		return nil, nil
 	}
