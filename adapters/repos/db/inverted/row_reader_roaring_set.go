@@ -79,7 +79,8 @@ func (rr *RowReaderRoaringSet) fullKey() []byte {
 	if len(rr.keyPrefix) == 0 {
 		return rr.value
 	}
-	return append(rr.keyPrefix, rr.value...)
+	n := len(rr.keyPrefix)
+	return append(rr.keyPrefix[:n:n], rr.value...)
 }
 
 // bareKey strips keyPrefix from k, returning just the value portion.
@@ -256,7 +257,8 @@ func (rr *RowReaderRoaringSet) like(ctx context.Context,
 
 	if like.optimizable {
 		// Seek to prefix+like.min so we start at the right position in the bucket.
-		seekMin = append(rr.keyPrefix, like.min...)
+		n := len(rr.keyPrefix)
+		seekMin = append(rr.keyPrefix[:n:n], like.min...)
 		initialK, initialV = c.Seek(seekMin)
 	} else if len(rr.keyPrefix) > 0 {
 		initialK, initialV = c.Seek(rr.keyPrefix)
