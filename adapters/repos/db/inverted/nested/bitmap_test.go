@@ -20,8 +20,24 @@ import (
 	"github.com/weaviate/weaviate/adapters/repos/db/roaringset"
 )
 
-func newTestOps() *BitmapOps {
-	return NewBitmapOps(roaringset.NewBitmapBufPoolNoop())
+// requireBitmapValid asserts that bm's backing buffer has not been zeroed by
+// the tracking pool's release function. A zeroed buffer has NumContainers()==0,
+// indicating premature release.
+func requireBitmapValid(t *testing.T, bm *sroar.Bitmap) {
+	t.Helper()
+	require.NotNil(t, bm)
+	require.Positive(t, bm.NumContainers(), "bitmap backing buffer is zeroed — premature release?")
+}
+
+func newTrackingOps(t *testing.T) *BitmapOps {
+	t.Helper()
+	pool := roaringset.NewBitmapBufPoolTracking()
+	t.Cleanup(func() {
+		if n := pool.Outstanding(); n != 0 {
+			t.Errorf("pool: %d bitmap buffer(s) not released", n)
+		}
+	})
+	return NewBitmapOps(pool)
 }
 
 func TestEncodeDecodeRoundtrip(t *testing.T) {
@@ -136,6 +152,28 @@ func TestOrDocIDMasksDocID(t *testing.T) {
 	assert.Equal(t, uint64(0), DecodeDocID(result[0]))
 }
 
+func TestEncodeOutOfRangeClipped(t *testing.T) {
+	// leafIdx with upper bits set would shift into the root field without
+	// masking. Using MaxLeavesPerRoot+5 (clips to 5) proves the lower bits are
+	// preserved and the overflow bits are dropped, not that the result is zero.
+	oversizedLeaf := uint16(MaxLeavesPerRoot + 5) // clips to 5
+	encoded := Encode(1, oversizedLeaf, 0)
+	assert.Equal(t, uint16(1), DecodeRootIdx(encoded), "oversized leafIdx must not bleed into root field")
+	assert.Equal(t, uint16(5), DecodeLeafIdx(encoded), "oversized leafIdx lower bits are preserved")
+
+	// rootIdx with upper bits set is clipped; lower bits must not spill into
+	// leaf. Using MaxRoots+3 (clips to 3) proves the same.
+	oversizedRoot := uint16(MaxRoots + 3) // clips to 3
+	encoded2 := Encode(oversizedRoot, 1, 0)
+	assert.Equal(t, uint16(3), DecodeRootIdx(encoded2), "oversized rootIdx lower bits are preserved")
+	assert.Equal(t, uint16(1), DecodeLeafIdx(encoded2), "oversized rootIdx must not bleed into leaf field")
+
+	// Both oversized simultaneously: each field clips independently.
+	encoded3 := Encode(oversizedRoot, oversizedLeaf, 0)
+	assert.Equal(t, uint16(3), DecodeRootIdx(encoded3), "oversized rootIdx lower bits are preserved")
+	assert.Equal(t, uint16(5), DecodeLeafIdx(encoded3), "oversized leafIdx lower bits are preserved")
+}
+
 func TestDirectAND(t *testing.T) {
 	// addresses.city="Madrid" AND addresses.postcode="28001" (same element)
 	// Both have positions {r1|l2|d124}
@@ -172,11 +210,12 @@ func TestConstants(t *testing.T) {
 }
 
 func TestBitmapOps_NewEmpty(t *testing.T) {
-	ops := newTestOps()
+	ops := newTrackingOps(t)
 
 	result, release := ops.NewEmpty(1024)
 	defer release()
 
+	requireBitmapValid(t, result)
 	assert.NotNil(t, result)
 	assert.True(t, result.IsEmpty())
 
@@ -185,7 +224,7 @@ func TestBitmapOps_NewEmpty(t *testing.T) {
 }
 
 func TestBitmapOps_MaskLeaf(t *testing.T) {
-	ops := newTestOps()
+	ops := newTrackingOps(t)
 
 	t.Run("leaf bits zeroed, root and docID preserved", func(t *testing.T) {
 		bm := sroar.NewBitmap()
@@ -200,6 +239,7 @@ func TestBitmapOps_MaskLeaf(t *testing.T) {
 		masked, release := ops.MaskLeaf(bm)
 		defer release()
 
+		requireBitmapValid(t, masked)
 		// After masking leaf bits, all positions with same root+docID collapse
 		arr := masked.ToArray()
 		assert.Len(t, arr, 2) // r1|d123 and r1|d456
@@ -236,6 +276,8 @@ func TestBitmapOps_MaskLeaf(t *testing.T) {
 		maskedMake, relMake := ops.MaskLeaf(makeBm)
 		defer relMake()
 
+		requireBitmapValid(t, maskedCity)
+		requireBitmapValid(t, maskedMake)
 		result := maskedCity.And(maskedMake)
 		arr := result.ToArray()
 		require.Len(t, arr, 1)
@@ -245,7 +287,7 @@ func TestBitmapOps_MaskLeaf(t *testing.T) {
 }
 
 func TestBitmapOps_MaskRootLeaf(t *testing.T) {
-	ops := newTestOps()
+	ops := newTrackingOps(t)
 
 	t.Run("root and leaf bits zeroed, only docID remains", func(t *testing.T) {
 		bm := sroar.NewBitmap()
@@ -259,6 +301,7 @@ func TestBitmapOps_MaskRootLeaf(t *testing.T) {
 		stripped, release := ops.MaskRootLeaf(bm)
 		defer release()
 
+		requireBitmapValid(t, stripped)
 		arr := stripped.ToArray()
 		assert.Len(t, arr, 2) // d999 and d888
 		for _, v := range arr {
@@ -286,11 +329,12 @@ func TestBitmapOps_MaskRootLeaf(t *testing.T) {
 }
 
 func TestBitmapOps_AndAll(t *testing.T) {
-	ops := newTestOps()
+	ops := newTrackingOps(t)
 
 	t.Run("empty input returns empty bitmap", func(t *testing.T) {
 		result, release := ops.AndAll(nil, 1)
 		defer release()
+		requireBitmapValid(t, result)
 		assert.True(t, result.IsEmpty())
 	})
 
@@ -299,6 +343,7 @@ func TestBitmapOps_AndAll(t *testing.T) {
 		bm.SetMany([]uint64{1, 2, 3})
 		result, release := ops.AndAll([]*sroar.Bitmap{bm}, 1)
 		defer release()
+		requireBitmapValid(t, result)
 		assert.Equal(t, bm.ToArray(), result.ToArray())
 		// result is a clone — mutating it must not affect the original
 		result.Remove(2)
@@ -312,6 +357,7 @@ func TestBitmapOps_AndAll(t *testing.T) {
 		b.SetMany([]uint64{2, 4, 6})
 		result, release := ops.AndAll([]*sroar.Bitmap{a, b}, 1)
 		defer release()
+		requireBitmapValid(t, result)
 		assert.Equal(t, []uint64{2, 4}, result.ToArray())
 		// inputs unmodified
 		assert.Equal(t, []uint64{1, 2, 3, 4}, a.ToArray())
@@ -326,12 +372,13 @@ func TestBitmapOps_AndAll(t *testing.T) {
 		c.SetMany([]uint64{3, 4, 5})
 		result, release := ops.AndAll([]*sroar.Bitmap{a, b, c}, 1)
 		defer release()
+		requireBitmapValid(t, result)
 		assert.Equal(t, []uint64{3, 4}, result.ToArray())
 	})
 }
 
 func TestBitmapOps_AndAllMaskLeaf(t *testing.T) {
-	ops := newTestOps()
+	ops := newTrackingOps(t)
 
 	doc := uint64(42)
 	posA := Encode(1, 3, doc) // root=1 leaf=3 doc=42
@@ -341,6 +388,7 @@ func TestBitmapOps_AndAllMaskLeaf(t *testing.T) {
 	t.Run("empty input returns empty bitmap", func(t *testing.T) {
 		result, release := ops.AndAllMaskLeaf(nil, 1)
 		defer release()
+		requireBitmapValid(t, result)
 		assert.True(t, result.IsEmpty())
 	})
 
@@ -351,6 +399,7 @@ func TestBitmapOps_AndAllMaskLeaf(t *testing.T) {
 		bmB.Set(posB)
 		result, release := ops.AndAllMaskLeaf([]*sroar.Bitmap{bmA, bmB}, 1)
 		defer release()
+		requireBitmapValid(t, result)
 		// After masking leaf bits: both become Encode(1, 0, 42) → AND non-empty
 		require.False(t, result.IsEmpty())
 		// Result contains root+docID only (leaf zeroed)
@@ -365,6 +414,7 @@ func TestBitmapOps_AndAllMaskLeaf(t *testing.T) {
 		bmC.Set(posC) // root=2
 		result, release := ops.AndAllMaskLeaf([]*sroar.Bitmap{bmA, bmC}, 1)
 		defer release()
+		requireBitmapValid(t, result)
 		// After masking: root=1|doc=42 vs root=2|doc=42 → no overlap
 		assert.True(t, result.IsEmpty())
 	})
@@ -379,7 +429,7 @@ func TestBitmapOps_AndAllMaskLeaf(t *testing.T) {
 }
 
 func TestBitmapOps_MaskLeafAnd(t *testing.T) {
-	ops := newTestOps()
+	ops := newTrackingOps(t)
 
 	t.Run("intersection of same-element positions, leaf zeroed", func(t *testing.T) {
 		a := sroar.NewBitmap()
@@ -392,6 +442,7 @@ func TestBitmapOps_MaskLeafAnd(t *testing.T) {
 		result, release := ops.MaskLeafAnd(a, b)
 		defer release()
 
+		requireBitmapValid(t, result)
 		arr := result.ToArray()
 		require.Len(t, arr, 1)
 		assert.Equal(t, uint16(0), DecodeLeafIdx(arr[0]))
@@ -407,6 +458,7 @@ func TestBitmapOps_MaskLeafAnd(t *testing.T) {
 		result, release := ops.MaskLeafAnd(a, b)
 		defer release()
 
+		requireBitmapValid(t, result)
 		assert.True(t, result.IsEmpty())
 	})
 
@@ -426,75 +478,67 @@ func TestBitmapOps_MaskLeafAnd(t *testing.T) {
 	})
 }
 
-func TestBitmapOps_AndMaskLeaf(t *testing.T) {
-	ops := newTestOps()
+func TestBitmapOps_IntersectsMaskedLeaf(t *testing.T) {
+	ops := newTrackingOps(t)
 
-	// a is leaf-masked (e.g. preFilter from AndAllMaskLeaf), b has raw positions
-	// (e.g. elemBitmap). Result keeps values from a whose (root, docID) appear
-	// in b at any leaf. CloneToBuf(a) + AndMaskedConc(b) avoids re-masking a.
-	t.Run("matches on root+docID regardless of leaf in b", func(t *testing.T) {
-		a := sroar.NewBitmap()
-		a.Set(Encode(1, 0, 10)) // doc 10, leaf=0 (pre-masked)
-		a.Set(Encode(1, 0, 20)) // doc 20, leaf=0 (pre-masked)
+	t.Run("match — same root and docID, different leaf", func(t *testing.T) {
+		// rootDoc is leaf-masked: root=1, leaf=0, doc=123
+		rootDoc := sroar.NewBitmap()
+		rootDoc.Set(Encode(1, 0, 123))
 
-		b := sroar.NewBitmap()
-		b.Set(Encode(1, 3, 10)) // doc 10 at leaf=3 (raw position)
-		b.Set(Encode(1, 5, 30)) // doc 30 at leaf=5 (not in a)
+		// raw has a raw position at root=1, leaf=3, doc=123 — after masking leaf
+		// it becomes root=1, leaf=0, doc=123 → overlaps rootDoc
+		raw := sroar.NewBitmap()
+		raw.Set(Encode(1, 3, 123))
 
-		result, release := ops.AndMaskLeaf(a, b, 1)
-		defer release()
-
-		arr := result.ToArray()
-		require.Len(t, arr, 1)
-		assert.Equal(t, uint16(1), DecodeRootIdx(arr[0]))
-		assert.Equal(t, uint16(0), DecodeLeafIdx(arr[0])) // retains a's leaf=0
-		assert.Equal(t, uint64(10), DecodeDocID(arr[0]))
+		assert.True(t, ops.IntersectsMaskedLeaf(rootDoc, raw))
 	})
 
-	t.Run("MaskLeafAnd gives empty when a is pre-masked, AndMaskLeaf does not", func(t *testing.T) {
-		// MaskLeafAnd = MaskLeaf(a ∩ b): requires exact key match, so pre-masked
-		// a (leaf=0) never matches raw b (leaf≠0) → always empty.
-		// AndMaskLeaf = a AND MaskLeaf(b): correct for pre-masked a.
-		a := sroar.NewBitmap()
-		a.Set(Encode(1, 0, 42)) // leaf=0 (pre-masked)
+	t.Run("no match — same root, different docID", func(t *testing.T) {
+		rootDoc := sroar.NewBitmap()
+		rootDoc.Set(Encode(1, 0, 123))
 
-		b := sroar.NewBitmap()
-		b.Set(Encode(1, 7, 42)) // leaf=7 (raw position)
+		raw := sroar.NewBitmap()
+		raw.Set(Encode(1, 3, 456)) // different doc
 
-		wrong, rel1 := ops.MaskLeafAnd(a, b)
-		defer rel1()
-		assert.True(t, wrong.IsEmpty())
-
-		correct, rel2 := ops.AndMaskLeaf(a, b, 1)
-		defer rel2()
-		assert.False(t, correct.IsEmpty())
+		assert.False(t, ops.IntersectsMaskedLeaf(rootDoc, raw))
 	})
 
-	t.Run("no match when root differs", func(t *testing.T) {
-		a := sroar.NewBitmap()
-		a.Set(Encode(1, 0, 10))
+	t.Run("no match — different root, same docID", func(t *testing.T) {
+		rootDoc := sroar.NewBitmap()
+		rootDoc.Set(Encode(1, 0, 123))
 
-		b := sroar.NewBitmap()
-		b.Set(Encode(2, 3, 10)) // same docID, different root
+		raw := sroar.NewBitmap()
+		raw.Set(Encode(2, 1, 123)) // different root
 
-		result, release := ops.AndMaskLeaf(a, b, 1)
-		defer release()
-
-		assert.True(t, result.IsEmpty())
+		assert.False(t, ops.IntersectsMaskedLeaf(rootDoc, raw))
 	})
 
-	t.Run("inputs not modified", func(t *testing.T) {
-		a := sroar.NewBitmap()
-		a.Set(Encode(1, 0, 10))
-		b := sroar.NewBitmap()
-		b.Set(Encode(1, 3, 10))
-		origA := a.ToArray()
-		origB := b.ToArray()
+	t.Run("empty rootDoc", func(t *testing.T) {
+		raw := sroar.NewBitmap()
+		raw.Set(Encode(1, 3, 123))
 
-		_, release := ops.AndMaskLeaf(a, b, 1)
-		defer release()
+		assert.False(t, ops.IntersectsMaskedLeaf(sroar.NewBitmap(), raw))
+	})
 
-		assert.Equal(t, origA, a.ToArray())
-		assert.Equal(t, origB, b.ToArray())
+	t.Run("empty raw", func(t *testing.T) {
+		rootDoc := sroar.NewBitmap()
+		rootDoc.Set(Encode(1, 0, 123))
+
+		assert.False(t, ops.IntersectsMaskedLeaf(rootDoc, sroar.NewBitmap()))
+	})
+
+	t.Run("match among multiple positions", func(t *testing.T) {
+		// rootDoc covers two (root, doc) pairs
+		rootDoc := sroar.NewBitmap()
+		rootDoc.Set(Encode(1, 0, 100))
+		rootDoc.Set(Encode(2, 0, 200))
+
+		// raw has positions for root=2, doc=200 only
+		raw := sroar.NewBitmap()
+		raw.Set(Encode(1, 5, 999)) // no match
+		raw.Set(Encode(2, 3, 200)) // matches root=2, doc=200
+
+		assert.True(t, ops.IntersectsMaskedLeaf(rootDoc, raw))
 	})
 }
