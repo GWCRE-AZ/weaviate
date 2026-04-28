@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -289,7 +290,8 @@ func (c *DBUser) GetUsers(userIds ...string) (map[string]*User, error) {
 	defer c.lock.RUnlock()
 
 	if len(userIds) == 0 {
-		return c.data.Users, nil
+		// Clone so callers can iterate without racing concurrent writers to c.data.Users.
+		return maps.Clone(c.data.Users), nil
 	}
 
 	users := make(map[string]*User, len(userIds))
