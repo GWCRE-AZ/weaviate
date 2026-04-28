@@ -4417,9 +4417,9 @@ func TestNestedFilteringIsNullAndMultiLevelArrayIndex(t *testing.T) {
 }
 
 // TestNestedFilteringMixedArrayIndexConstraints verifies AND filters where one
-// condition carries an arr[N] constraint and another does not. Both partitions
-// are resolved to root+docID positions and AND'd at that level, so all conditions
-// must be satisfied by the SAME root element.
+// condition carries an arr[N] constraint and another does not. The unconstrained
+// condition is resolved as "any element satisfies it"; the constrained condition
+// is resolved only for the specified element. Results are ANDed at docID level.
 //
 // This is exercised at two nesting depths:
 //
@@ -4454,16 +4454,15 @@ func TestNestedFilteringMixedArrayIndexConstraints(t *testing.T) {
 	// Root-level: nestedArray.addresses.city="berlin" AND nestedArray[1].cars.make="bmw"
 	//
 	// groupChildrenByArrayIndicesKey: key="" vs key="[1]" → two partitions.
-	// Each partition is resolved to root+docID positions; the results are AND'd
-	// at root+docID level so both conditions must be satisfied by the SAME
-	// nestedArray element.
+	// Partition "" (unconstrained): fetches city="berlin" from any nestedArray element.
+	// Partition "[1]" (restricted):  fetches make="bmw" restricted to IdxKey("",1).
+	// Combined: docs where (any element has berlin) AND (element [1] has bmw).
 	//
 	// doc5: nestedArray[1]={addresses[city:berlin](leaf=1), cars[make:bmw](leaf=2)}
-	//         → both conditions in element [1] (root=2) → same element ✓ → returned
+	//         → berlin anywhere ✓ + bmw in [1] ✓ → returned
 	// doc7: nestedArray[0]={addresses[city:berlin](root=1,leaf=1)}
 	//       nestedArray[1]={cars[make:bmw](root=2,leaf=1)}
-	//         → berlin in element [0] (root=1), bmw in element [1] (root=2)
-	//         → different elements → root+docID AND fails → NOT returned
+	//         → berlin in [0] satisfies unconstrained ✓ + bmw in [1] ✓ → returned
 	// doc8: nestedArray[1]={cars[make:bmw](root=2,leaf=1)}, no berlin anywhere
 	//         → unconstrained partition empty → not returned
 	// -------------------------------------------------------------------------
@@ -4508,9 +4507,9 @@ func TestNestedFilteringMixedArrayIndexConstraints(t *testing.T) {
 				},
 			},
 		}
-		// Only doc5: both conditions satisfied within the same element [1].
-		// doc7 has berlin in [0] and bmw in [1] — different elements, does not match.
-		run(t, searcher, f, []uint64{doc5})
+		// doc5 and doc7 both match: doc5 has berlin+bmw in [1]; doc7 has berlin
+		// in [0] (satisfies unconstrained) and bmw in [1]. doc8 has no berlin.
+		run(t, searcher, f, []uint64{doc5, doc7})
 	})
 
 	// -------------------------------------------------------------------------
@@ -5558,165 +5557,5 @@ func TestIsNullWithArrNInCorrelatedAnd(t *testing.T) {
 		defer result.release()
 		requireBitmapValid(t, result.docIDs)
 		assert.Equal(t, []uint64{doc1}, result.docIDs.ToArray())
-	})
-}
-
-// ---------------------------------------------------------------------------
-// Mixed arr[N] + non-arr[N] correlated AND — same root element requirement
-// ---------------------------------------------------------------------------
-
-// TestMixedArrNCorrelatedAndIssue verifies that when an unconstrained condition
-// (key="") is mixed with a constrained condition (key="cars[1]" or key="[1]"),
-// both conditions must be satisfied by the SAME root element. This is enforced
-// by resolving each group to root+docID positions and AND-ing at that level,
-// rather than at plain docID level.
-func TestMixedArrNCorrelatedAndIssue(t *testing.T) {
-	const (
-		doc1 = uint64(1) // should NOT match (different root elements satisfy each condition)
-		doc2 = uint64(2) // should match (same root element satisfies all conditions)
-	)
-	enc := func(root, leaf uint16, docID uint64) uint64 { return invnested.Encode(root, leaf, docID) }
-	writeIdx := func(t *testing.T, mb *lsmkv.Bucket, relPath string, index int, positions []uint64) {
-		t.Helper()
-		require.NoError(t, mb.RoaringSetAddList(invnested.IdxKey(relPath, index), positions))
-	}
-
-	// Test 1: root arr[N] + non-arr[N] value filters
-	// garages[1].cars.make="honda" AND garages.city="berlin"
-	// Groups: key="[1]" (garages[1]) vs key="" (any garage)
-	// doc1: garage[0]{city:berlin}, garage[1]{cars.make:honda} → different garages, should NOT match
-	// doc2: garage[0]{city:paris}, garage[1]{city:berlin, cars.make:honda} → same garage, should match
-	t.Run("root arr[N] + non-arr[N] value — same garage required", func(t *testing.T) {
-		searcher, vb, mb := newIsNullCorrelationSearcher(t, "garages")
-		class := isNullCorrelationClass()
-
-		// doc1: garage[0] has city=berlin; garage[1] has cars.make=honda
-		p1g0city := enc(1, 2, doc1)
-		p1g1car  := enc(2, 1, doc1)
-		// doc2: garage[1] has both city=berlin AND cars.make=honda
-		p2g1city := enc(2, 2, doc2)
-		p2g1car  := enc(2, 1, doc2)
-
-		writeNestedValue(t, vb, "city", "berlin", []uint64{p1g0city, p2g1city})
-		writeNestedValue(t, vb, "cars.make", "honda", []uint64{p1g1car, p2g1car})
-
-		writeIdx(t, mb, "", 0, []uint64{p1g0city})
-		writeIdx(t, mb, "", 1, []uint64{p1g1car, p2g1city, p2g1car})
-
-		idx1 := filnested.ArrayIndex{RelPath: "", Index: 1}
-		pv := makeCorrelatedPvp(class, "garages",
-			makeLeafPvpWithIdx(class, "garages", "cars.make", "honda", idx1),
-			makeLeafPvp(class, "garages", "city", "berlin"),
-		)
-		result, err := pv.resolveDocIDs(context.Background(), searcher, 0)
-		require.NoError(t, err)
-		defer result.release()
-		requireBitmapValid(t, result.docIDs)
-		// After fix: only doc2 (same garage satisfies both conditions)
-		assert.Equal(t, []uint64{doc2}, result.docIDs.ToArray())
-	})
-
-	// Test 2: intermediate arr[N] + non-arr[N] value filters
-	// garages.cars[1].make="honda" AND garages.city="berlin"
-	// Groups: key="cars[1]" vs key=""
-	// doc1: garage[0]{city:berlin}, garage[1]{cars[1].make:honda} → different garages, should NOT match
-	// doc2: garage[0]{city:berlin, cars[1].make:honda} → same garage, should match
-	t.Run("intermediate arr[N] + non-arr[N] value — same garage required", func(t *testing.T) {
-		searcher, vb, mb := newIsNullCorrelationSearcher(t, "garages")
-		class := isNullCorrelationClass()
-
-		// doc1: garage[0] city=berlin; garage[1] cars[1]=honda
-		p1g0city := enc(1, 2, doc1)
-		p1g1c1   := enc(2, 1, doc1) // garage[1].cars[1]
-		// doc2: garage[0] has both
-		p2g0city := enc(1, 2, doc2)
-		p2g0c1   := enc(1, 1, doc2) // garage[0].cars[1]
-
-		writeNestedValue(t, vb, "city", "berlin", []uint64{p1g0city, p2g0city})
-		writeNestedValue(t, vb, "cars.make", "honda", []uint64{p1g1c1, p2g0c1})
-
-		writeIdx(t, mb, "cars", 1, []uint64{p1g1c1, p2g0c1})
-
-		idx1 := filnested.ArrayIndex{RelPath: "cars", Index: 1}
-		pv := makeCorrelatedPvp(class, "garages",
-			makeLeafPvpWithIdx(class, "garages", "cars.make", "honda", idx1),
-			makeLeafPvp(class, "garages", "city", "berlin"),
-		)
-		result, err := pv.resolveDocIDs(context.Background(), searcher, 0)
-		require.NoError(t, err)
-		defer result.release()
-		requireBitmapValid(t, result.docIDs)
-		// After fix: only doc2
-		assert.Equal(t, []uint64{doc2}, result.docIDs.ToArray())
-	})
-
-	// Test 3: root arr[N] + non-arr[N] IsNull filter
-	// garages[1].cars.make IS NULL AND garages.city="berlin"
-	// doc1: garage[0]{city:berlin, cars.make:present}, garage[1]{city:paris, no cars.make} → different garages
-	// doc2: garage[0]{city:paris}, garage[1]{city:berlin, no cars.make} → same garage
-	t.Run("root arr[N] + non-arr[N] IsNull — same garage required", func(t *testing.T) {
-		searcher, vb, mb := newIsNullCorrelationSearcher(t, "garages")
-		class := isNullCorrelationClass()
-
-		p1g0city := enc(1, 2, doc1)
-		p1g0car  := enc(1, 1, doc1)
-		p1g1city := enc(2, 2, doc1)
-		p2g1city := enc(2, 2, doc2)
-
-		writeNestedValue(t, vb, "city", "berlin", []uint64{p1g0city, p2g1city})
-		writeNestedExists(t, mb, "cars.make", []uint64{p1g0car}) // only doc1 garage[0] has make
-		// _exists."" required for fetchRootAnchor (all root element positions)
-		writeNestedExists(t, mb, "", []uint64{p1g0city, p1g0car, p1g1city, p2g1city})
-
-		writeIdx(t, mb, "", 0, []uint64{p1g0city, p1g0car})
-		writeIdx(t, mb, "", 1, []uint64{p1g1city, p2g1city})
-
-		idx1 := filnested.ArrayIndex{RelPath: "", Index: 1}
-		pv := makeCorrelatedPvp(class, "garages",
-			makeIsNullPvpWithIdx(class, "garages", "cars.make", true, idx1),
-			makeLeafPvp(class, "garages", "city", "berlin"),
-		)
-		result, err := pv.resolveDocIDs(context.Background(), searcher, 0)
-		require.NoError(t, err)
-		defer result.release()
-		requireBitmapValid(t, result.docIDs)
-		// After fix: only doc2 (garage[1] has city=berlin AND no cars.make)
-		assert.Equal(t, []uint64{doc2}, result.docIDs.ToArray())
-	})
-
-	// Test 4: intermediate arr[N] + non-arr[N] IsNull filter
-	// garages.cars[1].make IS NULL AND garages.city="berlin"
-	// doc1: garage[0]{city:berlin, cars[1].make:present}, garage[1]{city:berlin, no cars[1].make}
-	// doc2: garage[0]{city:berlin, no cars[1].make}
-	t.Run("intermediate arr[N] + non-arr[N] IsNull — same garage required", func(t *testing.T) {
-		searcher, vb, mb := newIsNullCorrelationSearcher(t, "garages")
-		class := isNullCorrelationClass()
-
-		p1g0city := enc(1, 2, doc1)
-		p1g0c1   := enc(1, 1, doc1) // doc1 garage[0] cars[1]
-		p1g1city := enc(2, 2, doc1)
-		p1g1c1   := enc(2, 1, doc1) // doc1 garage[1] cars[1]
-		p2g0city := enc(1, 2, doc2)
-		p2g0c1   := enc(1, 1, doc2) // doc2 garage[0] cars[1]
-
-		writeNestedValue(t, vb, "city", "berlin", []uint64{p1g0city, p1g1city, p2g0city})
-		writeNestedExists(t, mb, "cars.make", []uint64{p1g0c1}) // only doc1 garage[0].cars[1] has make
-		// _exists."" for fetchRootAnchor (all garage positions)
-		writeNestedExists(t, mb, "", []uint64{p1g0city, p1g0c1, p1g1city, p1g1c1, p2g0city, p2g0c1})
-
-		writeIdx(t, mb, "cars", 1, []uint64{p1g0c1, p1g1c1, p2g0c1})
-
-		idx1 := filnested.ArrayIndex{RelPath: "cars", Index: 1}
-		pv := makeCorrelatedPvp(class, "garages",
-			makeIsNullPvpWithIdx(class, "garages", "cars.make", true, idx1),
-			makeLeafPvp(class, "garages", "city", "berlin"),
-		)
-		result, err := pv.resolveDocIDs(context.Background(), searcher, 0)
-		require.NoError(t, err)
-		defer result.release()
-		requireBitmapValid(t, result.docIDs)
-		// doc1 garage[1]: city=berlin AND no cars[1].make → matches
-		// doc2 garage[0]: city=berlin AND no cars[1].make → matches
-		assert.ElementsMatch(t, []uint64{doc1, doc2}, result.docIDs.ToArray())
 	})
 }

@@ -211,16 +211,12 @@ type positionBitmaps struct {
 // correlation. It builds a resolutionPlan for the group's paths, pre-computes
 // raw position bitmaps, and executes the plan to enforce same-element semantics.
 //
-// When children have different arr[N] constraints they are partitioned by their
-// arrayIndices key. The AND strategy depends on whether any partition is unconstrained:
-//
-//   - All groups explicitly constrained (e.g. nestedArray[0].x AND nestedArray[1].y):
-//     the user is intentionally querying different elements → docID-level AND.
-//
-//   - Any group unconstrained ("" key) mixed with constrained (e.g.
-//     garages[1].make="honda" AND garages.city="berlin"):
-//     the unconstrained condition must match the SAME root element as the
-//     constrained one → root+docID AND.
+// When children carry conflicting arr[N] constraints (e.g. cars[1].X and
+// cars[0].Y), they are partitioned by their arrayIndices key and each partition
+// is resolved independently. The per-partition results are ANDed at docID level
+// so that a document is returned only when it satisfies all partitions — without
+// incorrectly requiring conditions from different explicit elements to land in
+// the same element.
 func (pv *propValuePair) resolveNestedCorrelated(ctx context.Context, s *Searcher) (*docBitmap, error) {
 	groups := groupChildrenByArrayIndicesKey(pv.children)
 	switch len(groups) {
@@ -230,74 +226,35 @@ func (pv *propValuePair) resolveNestedCorrelated(ctx context.Context, s *Searche
 		return pv.resolveNestedCorrelatedGroup(ctx, s, groups[0])
 	}
 
-	// Determine whether any group is unconstrained (arr[N] key == "").
-	hasUnconstrained := false
-	for _, g := range groups {
-		if groupKeyOf(g) == "" {
-			hasUnconstrained = true
-			break
-		}
-	}
-
-	if !hasUnconstrained {
-		// All groups carry explicit different indices — the user is querying
-		// different elements independently. Resolve each group to plain docIDs
-		// and AND at docID level (original multi-group behavior).
-		dbm, err := pv.resolveNestedCorrelatedGroup(ctx, s, groups[0])
-		if err != nil {
-			return nil, err
-		}
-		succeeded := false
-		defer func() {
-			if !succeeded {
-				dbm.release()
-			}
-		}()
-		for _, group := range groups[1:] {
-			groupDbm, err := pv.resolveNestedCorrelatedGroup(ctx, s, group)
-			if err != nil {
-				return nil, err
-			}
-			dbm = mergeBitmapsAndOrWithDenyList(dbm, groupDbm, filters.OperatorAnd)
-		}
-		succeeded = true
-		return dbm, nil
-	}
-
-	// Has an unconstrained group: all conditions must be satisfied by the SAME
-	// root element. Resolve each group to root+docID positions and AND them so
-	// that conditions from different root elements cannot combine.
-	var releases []func()
-	succeeded := false
-	defer func() {
-		if !succeeded {
-			for _, rel := range releases {
-				rel()
-			}
-		}
-	}()
-
-	masked, rel, err := pv.resolveNestedCorrelatedGroupMasked(ctx, s, groups[0])
+	// Multiple groups with conflicting arr[N] constraints: resolve each group
+	// independently using same-element semantics, then AND the docID results.
+	dbm, err := pv.resolveNestedCorrelatedGroup(ctx, s, groups[0])
 	if err != nil {
 		return nil, err
 	}
-	releases = append(releases, rel)
+
+	// Release dbm's buffer on any non-success exit (error or panic).
+	// Cleared to a no-op once ownership is transferred to the caller.
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			dbm.release()
+		}
+	}()
 
 	for _, group := range groups[1:] {
-		groupMasked, groupRel, err := pv.resolveNestedCorrelatedGroupMasked(ctx, s, group)
+		groupDbm, err := pv.resolveNestedCorrelatedGroup(ctx, s, group)
 		if err != nil {
 			return nil, err
 		}
-		releases = append(releases, groupRel)
-		masked.AndConc(groupMasked, concurrency.SROAR_MERGE)
+		// mergeBitmapsAndOrWithDenyList selects the more efficient bitmap to
+		// accumulate into (smaller for AND), merges in-place, and defers
+		// release of the unused buffer — whether that is dbmGroup or the old
+		// dbm after an efficiency swap.
+		dbm = mergeBitmapsAndOrWithDenyList(dbm, groupDbm, filters.OperatorAnd)
 	}
-
-	docIDs, docRelease := s.nestedBitmapOps.MaskRootLeaf(masked)
 	succeeded = true
-	for _, rel := range releases {
-		rel()
-	}
-	return &docBitmap{docIDs: docIDs, release: docRelease}, nil
+	return dbm, nil
 }
 
 // resolveNestedCorrelatedGroup resolves a single set of children using
@@ -433,132 +390,6 @@ func (pv *propValuePair) resolveNestedCorrelatedGroup(ctx context.Context, s *Se
 	return &docBitmap{docIDs: docIDs, release: release}, nil
 }
 
-// resolveNestedCorrelatedGroupMasked is the same as resolveNestedCorrelatedGroup
-// but returns root+docID positions (leaf bits zeroed, root bits preserved) rather
-// than plain docIDs. Used by resolveNestedCorrelated when multiple groups must be
-// AND'd at root+docID level to enforce same-root-element semantics.
-func (pv *propValuePair) resolveNestedCorrelatedGroupMasked(ctx context.Context, s *Searcher, children []*propValuePair) (*sroar.Bitmap, func(), error) {
-	// Build the same executor as resolveNestedCorrelatedGroup — share the
-	// setup by delegating to the plan executor's executeMasked method.
-	// We replicate the positionsByPath / plan building inline to avoid a
-	// large refactor; the logic is identical to resolveNestedCorrelatedGroup.
-	positionsByPath := make(map[string]*positionBitmaps, len(children))
-	paths := make([]string, 0, len(children))
-
-	var excludePositions []*sroar.Bitmap
-	var releases []func()
-	succeeded := false
-	defer func() {
-		if !succeeded {
-			for _, rel := range releases {
-				rel()
-			}
-		}
-	}()
-
-	fetchAndRoute := func(leaf *propValuePair, isToken bool) error {
-		if leaf.operator == filters.OperatorIsNull {
-			positions, release, err := leaf.fetchNestedExistsPositions(s)
-			if err != nil {
-				return err
-			}
-			releases = append(releases, release)
-			isDenyList := len(leaf.value) > 0 && leaf.value[0] == 0x01
-			if isDenyList {
-				excludePositions = append(excludePositions, positions)
-			} else {
-				path := leaf.nested.relPath
-				if _, exists := positionsByPath[path]; !exists {
-					positionsByPath[path] = &positionBitmaps{}
-					paths = append(paths, path)
-				}
-				positionsByPath[path].independent = append(positionsByPath[path].independent, positions)
-			}
-			return nil
-		}
-
-		dbm, err := leaf.fetchNestedPositions(ctx, s, 0)
-		if err != nil {
-			return err
-		}
-		releases = append(releases, dbm.release)
-		path := leaf.nested.relPath
-		if _, exists := positionsByPath[path]; !exists {
-			positionsByPath[path] = &positionBitmaps{}
-			paths = append(paths, path)
-		}
-		if isToken {
-			positionsByPath[path].tokens = append(positionsByPath[path].tokens, dbm.docIDs)
-		} else {
-			positionsByPath[path].independent = append(positionsByPath[path].independent, dbm.docIDs)
-		}
-		return nil
-	}
-
-	for _, child := range children {
-		if child.nested.isNested {
-			if err := fetchAndRoute(child, pv.nested.childrenFromTokenization); err != nil {
-				return nil, nil, fmt.Errorf("nested correlated AND: fetch bitmap for %q: %w", child.nested.relPath, err)
-			}
-		} else {
-			for _, gc := range child.children {
-				if err := fetchAndRoute(gc, true); err != nil {
-					return nil, nil, fmt.Errorf("nested correlated AND: fetch bitmap for %q: %w", gc.nested.relPath, err)
-				}
-			}
-		}
-	}
-
-	var rootAnchor *sroar.Bitmap
-	var plan executionPlan
-	if len(positionsByPath) == 0 && len(excludePositions) > 0 {
-		mb := s.store.Bucket(helpers.BucketNestedMetaFromPropNameLSM(pv.prop))
-		if mb == nil {
-			return nil, nil, fmt.Errorf("nested correlated AND: meta bucket for %q not found — is it indexed?", pv.prop)
-		}
-		anchor, anchorRelease, err := pv.fetchRootAnchor(s, mb, children)
-		if err != nil {
-			return nil, nil, fmt.Errorf("nested correlated AND: fetch root anchor for %q: %w", pv.prop, err)
-		}
-		releases = append(releases, anchorRelease)
-		rootAnchor = anchor
-		plan.useRootAnchor = true
-	}
-	var metaBucket *lsmkv.Bucket
-	if len(positionsByPath) > 0 {
-		rootProp, err := schema.GetPropertyByName(pv.Class, pv.prop)
-		if err != nil {
-			return nil, nil, fmt.Errorf("nested correlated AND: root property %q not found in schema: %w", pv.prop, err)
-		}
-		metaBucket = s.store.Bucket(helpers.BucketNestedMetaFromPropNameLSM(pv.prop))
-		if metaBucket == nil {
-			return nil, nil, fmt.Errorf("nested correlated AND: meta bucket for %q not found — is it indexed?", pv.prop)
-		}
-		counts := make(conditionCounts, len(positionsByPath))
-		for path, positions := range positionsByPath {
-			counts[path] = [2]int{len(positions.tokens), len(positions.independent)}
-		}
-		var err2 error
-		plan, err2 = newExecutionPlanBuilder(rootProp.NestedProperties).build(paths, counts)
-		if err2 != nil {
-			return nil, nil, fmt.Errorf("nested correlated AND: build plan for %q: %w", pv.prop, err2)
-		}
-	}
-
-	masked, maskedRelease, err := newPlanExecutor(plan, positionsByPath, metaBucket, s.nestedBitmapOps, concurrency.SROAR_MERGE, rootAnchor, excludePositions...).executeMasked(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("nested correlated AND: executeMasked for %q: %w", pv.prop, err)
-	}
-
-	succeeded = true
-	allReleases := append(releases, maskedRelease)
-	return masked, func() {
-		for _, rel := range allReleases {
-			rel()
-		}
-	}, nil
-}
-
 // fetchRootAnchor returns the bitmap of element positions used as the starting
 // universe when all conditions in a correlated group are IsNull=true (no positive
 // anchor). It reads _exists."" from the meta bucket and, if any child carries
@@ -606,23 +437,6 @@ func (pv *propValuePair) fetchRootAnchor(s *Searcher, metaBucket *lsmkv.Bucket, 
 		return nil, nil, err
 	}
 	return restricted.docIDs, restricted.release, nil
-}
-
-// groupKeyOf returns the arr[N] constraint key for a group produced by
-// groupChildrenByArrayIndicesKey. It mirrors the key-computation logic used
-// inside that function so callers can inspect group keys without re-partitioning.
-func groupKeyOf(group []*propValuePair) string {
-	if len(group) == 0 {
-		return ""
-	}
-	child := group[0]
-	if child.nested.isNested {
-		return child.nested.arrayIndices.groupKey()
-	}
-	if len(child.children) > 0 {
-		return child.children[0].nested.arrayIndices.groupKey()
-	}
-	return ""
 }
 
 // groupChildrenByArrayIndicesKey partitions the children of a correlated AND
