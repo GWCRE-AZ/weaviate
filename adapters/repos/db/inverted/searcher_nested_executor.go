@@ -129,6 +129,69 @@ func (e *planExecutor) execute(ctx context.Context) (*sroar.Bitmap, func(), erro
 	return final, finalRelease, nil
 }
 
+// executeMasked runs the plan and returns root+docID positions (leaf bits
+// zeroed) without the final MaskRootLeaf step. Used by the multi-group
+// correlated resolver to AND across groups at root+docID level before
+// stripping root bits once at the end.
+func (e *planExecutor) executeMasked(ctx context.Context) (*sroar.Bitmap, func(), error) {
+	var intermediateReleases []func()
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			for _, rel := range intermediateReleases {
+				rel()
+			}
+		}
+	}()
+
+	finalBitmaps := make([]*sroar.Bitmap, 0, len(e.plan.groups))
+	for _, g := range e.plan.groups {
+		raw, rawReleases, err := e.collectRaw(g.paths)
+		if err != nil {
+			return nil, nil, err
+		}
+		intermediateReleases = append(intermediateReleases, rawReleases...)
+
+		switch g.op {
+		case groupAndAll:
+			if len(raw) == 1 {
+				finalBitmaps = append(finalBitmaps, raw[0])
+			} else {
+				result, release := e.bitmapOps.AndAll(raw, e.maxConcurrency)
+				intermediateReleases = append(intermediateReleases, release)
+				finalBitmaps = append(finalBitmaps, result)
+			}
+		case groupAndAllMaskLeaf:
+			finalBitmaps = append(finalBitmaps, raw...)
+		case groupRunIdxLoop:
+			if e.metaBucket == nil {
+				return nil, nil, fmt.Errorf("executeMasked: meta bucket is nil for idxLoop on %q", g.lcaPath)
+			}
+			result, release, err := e.runIdxLoop(ctx, g.lcaPath, raw)
+			if err != nil {
+				return nil, nil, err
+			}
+			intermediateReleases = append(intermediateReleases, release)
+			finalBitmaps = append(finalBitmaps, result)
+		default:
+			return nil, nil, fmt.Errorf("executeMasked: unhandled group op %d", g.op)
+		}
+	}
+
+	masked, maskedRelease, err := e.computeMasked(finalBitmaps)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	succeeded = true
+	allReleases := append(intermediateReleases, maskedRelease)
+	return masked, func() {
+		for _, rel := range allReleases {
+			rel()
+		}
+	}, nil
+}
+
 // computeMasked applies useRootAnchor / AndAllMaskLeaf / excludes and returns
 // the root+docID bitmap (leaf bits zeroed). Called by both execute and executeMasked.
 func (e *planExecutor) computeMasked(finalBitmaps []*sroar.Bitmap) (*sroar.Bitmap, func(), error) {
