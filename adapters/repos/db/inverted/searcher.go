@@ -520,7 +520,6 @@ func (s *Searcher) extractGeoFilter(prop *models.Property, value interface{},
 	}, nil
 }
 
-
 func (s *Searcher) extractUUIDFilter(prop *models.Property, value interface{},
 	valueType schema.DataType, operator filters.Operator, class *models.Class,
 ) (*propValuePair, error) {
