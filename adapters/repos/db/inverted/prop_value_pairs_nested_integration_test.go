@@ -2659,7 +2659,12 @@ func TestPlanCasesIntegration(t *testing.T) {
 			},
 		},
 		{
-			// Plan: single group, groupRunIdxLoop, lcaPath="cars.tires".
+			// Plan: hierarchical groupRunIdxLoop — outer GROUP@cars iterates
+			// _idx.cars[K] (preserved by needsWrappingGroup because the inner
+			// GROUP@cars.tires has multi-subs). Inner GROUP@cars.tires
+			// iterates _idx.cars.tires[K] AND parentScope to disambiguate
+			// same-K-different-parent physical instances.
+			//
 			// nested  doc7: bolts in tires[0], caps in tires[1] within root=1.
 			// nestedArray doc7: bolts in nestedArray[0].tires[0] (root=1), caps in nestedArray[1].tires[0] (root=2).
 			// nestedArray doc9: nestedArray[0].cars[0].tires[0]={bolts}, tires[1]={caps}
@@ -2668,22 +2673,31 @@ func TestPlanCasesIntegration(t *testing.T) {
 			nestedSetup: func(t *testing.T, vb, mb *lsmkv.Bucket) {
 				require.NoError(t, vb.RoaringSetAddList(invnested.ValueKey("cars.tires.bolts.size", size10), []uint64{E1(1, doc5), E1(1, doc7)}))
 				writeNestedValue(t, vb, "cars.tires.caps.color", "red", []uint64{E1(2, doc5), E1(2, doc7)})
+				// _idx.cars[0]: cars[0].descendants for each doc.
+				require.NoError(t, mb.RoaringSetAddList(invnested.IdxKey("cars", 0), []uint64{E1(1, doc5), E1(2, doc5), E1(1, doc7), E1(2, doc7)}))
+				// _idx.cars.tires[K]: per-tires element positions.
 				require.NoError(t, mb.RoaringSetAddList(invnested.IdxKey("cars.tires", 0), []uint64{E1(1, doc5), E1(2, doc5)}))
 				require.NoError(t, mb.RoaringSetAddList(invnested.IdxKey("cars.tires", 0), []uint64{E1(1, doc7)}))
 				require.NoError(t, mb.RoaringSetAddList(invnested.IdxKey("cars.tires", 1), []uint64{E1(2, doc7)}))
 			},
 			nestedArraySetup: func(t *testing.T, vb, mb *lsmkv.Bucket) {
-				// doc5: tires[0]={bolts(leaf=1),caps(leaf=2)} — both in same tires element
+				// doc5: tires[0]={bolts(leaf=1),caps(leaf=2)} — both in same tires element.
+				// cars[0].descendants = [L1, L2].
 				require.NoError(t, vb.RoaringSetAddList(invnested.ValueKey("cars.tires.bolts.size", size10), []uint64{E1(1, doc5)}))
 				writeNestedValue(t, vb, "cars.tires.caps.color", "red", []uint64{E1(2, doc5)})
+				require.NoError(t, mb.RoaringSetAddList(invnested.IdxKey("cars", 0), []uint64{E1(1, doc5), E1(2, doc5)}))
 				require.NoError(t, mb.RoaringSetAddList(invnested.IdxKey("cars.tires", 0), []uint64{E1(1, doc5), E1(2, doc5)}))
-				// doc7 cross-root: bolts in nestedArray[0].tires[0] (root=1), caps in nestedArray[1].tires[0] (root=2)
+				// doc7 cross-root: bolts in nestedArray[0].cars[0].tires[0] (root=1), caps in nestedArray[1].cars[0].tires[0] (root=2).
+				// cars[0].descendants per root: root=1→[L1], root=2→[L1].
 				require.NoError(t, vb.RoaringSetAddList(invnested.ValueKey("cars.tires.bolts.size", size10), []uint64{E(1, 1, doc7)}))
 				writeNestedValue(t, vb, "cars.tires.caps.color", "red", []uint64{E(2, 1, doc7)})
+				require.NoError(t, mb.RoaringSetAddList(invnested.IdxKey("cars", 0), []uint64{E(1, 1, doc7), E(2, 1, doc7)}))
 				require.NoError(t, mb.RoaringSetAddList(invnested.IdxKey("cars.tires", 0), []uint64{E(1, 1, doc7), E(2, 1, doc7)}))
-				// doc9 same-root intermediate: tires[0]={bolts}, tires[1]={caps} within nestedArray[0]
+				// doc9 same-root intermediate: nestedArray[0].cars[0].tires[0]={bolts}, tires[1]={caps}.
+				// cars[0].descendants = [L1, L2] under root=1.
 				require.NoError(t, vb.RoaringSetAddList(invnested.ValueKey("cars.tires.bolts.size", size10), []uint64{E(1, 1, doc9)}))
 				writeNestedValue(t, vb, "cars.tires.caps.color", "red", []uint64{E(1, 2, doc9)})
+				require.NoError(t, mb.RoaringSetAddList(invnested.IdxKey("cars", 0), []uint64{E(1, 1, doc9), E(1, 2, doc9)}))
 				require.NoError(t, mb.RoaringSetAddList(invnested.IdxKey("cars.tires", 0), []uint64{E(1, 1, doc9)}))
 				require.NoError(t, mb.RoaringSetAddList(invnested.IdxKey("cars.tires", 1), []uint64{E(1, 2, doc9)}))
 			},

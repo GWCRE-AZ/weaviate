@@ -7603,4 +7603,45 @@ func TestNestedFilteringCorrelatedAndFilterExamplesIndexed(t *testing.T) {
 		}
 		runOrderings(t, docs, parts, []strfmt.UUID{idMatch})
 	})
+
+	// SameKDifferentParent_with_two_sub_arrays: regression test for the case-3
+	// fix. Filter: cars.accessories.type AND cars.tires.width — two
+	// sibling sub-arrays under the same cars LCA.
+	//
+	// Plan: GROUP@garages { here:[], subs:[GROUP@garages.cars { here:[],
+	//        subs:[GROUP@accessories here:[type], GROUP@tires here:[width]] }] }
+	// canUseRawAndAll false (multi-sub at GROUP@cars), flat-AndAll bails on
+	// multi-sub → runIdxLoopRecursive. The wrapping GROUP@garages must be
+	// kept (not collapsed away) so its _idx.garages[K_g] iteration provides
+	// per-garage parentScope to the inner GROUP@cars's _idx.cars[K_c]
+	// iteration, disambiguating same-K-different-parent physical cars.
+	//
+	// Discriminating shapes:
+	//   - same physical car has both → match
+	//   - split garages, same K=0 → reject (different physical cars under
+	//     g[0] vs g[1] have disjoint leaves; per-garage parentScope rejects)
+	t.Run("SameKDifferentParent_with_two_sub_arrays_accessories_AND_tires", func(t *testing.T) {
+		idMatch := uuid(1)
+		idNoMatchSplitGaragesSameK := uuid(2)
+		accessory := func(typ string) map[string]any { return map[string]any{"type": typ} }
+		docs := []docDef{
+			{id: idMatch, props: map[string]any{"countries": asArr(
+				country(garage(nil, map[string]any{
+					"accessories": asArr(accessory("spoiler")),
+					"tires":       asArr(tire("205")),
+				})),
+			)}, note: "single car has both accessories.type and tires.width"},
+			{id: idNoMatchSplitGaragesSameK, props: map[string]any{"countries": asArr(
+				country(
+					garage(nil, map[string]any{"accessories": asArr(accessory("spoiler"))}),
+					garage(nil, map[string]any{"tires": asArr(tire("205"))}),
+				),
+			)}, note: "spoiler in g[0].cars[0]; 205 in g[1].cars[0] — same K=0, different garages"},
+		}
+		parts := []*filters.LocalFilter{
+			valueFilter("countries.garages.cars.accessories.type", "spoiler"),
+			valueFilter("countries.garages.cars.tires.width", "205"),
+		}
+		runOrderings(t, docs, parts, []strfmt.UUID{idMatch})
+	})
 }
