@@ -7553,53 +7553,54 @@ func TestNestedFilteringCorrelatedAndFilterExamplesIndexed(t *testing.T) {
 		runOrderings(t, docs, parts, []strfmt.UUID{idMatch, idMatchSplitGarages})
 	})
 
-	// SameKDifferentParent_with_subs: documents a confirmed bug in same-element
-	// semantics when the executor takes the runIdxLoopRecursive path
-	// (canUseRawAndAll=false, lcaPath != "").
+	// SameKDifferentParent_with_subs: regression test for the flat-AndAll path
+	// in evalGroup. Filter: cars.make = "honda" AND cars.tires.width = "205".
 	//
-	// Filter: cars.make = "honda" AND cars.tires.width = "205"
-	//   - cars.make sits at GROUP@cars (here)
-	//   - cars.tires.width sits at GROUP@cars.tires (sub)
-	//   - GROUP@cars has 1 here + 1 sub → canUseRawAndAll=false → runIdxLoopRecursive
+	// Plan: GROUP@cars { here:[make], subs:[GROUP@cars.tires { here:[width] }] }
+	// → not canUseRawAndAll (has subs), but the subtree is "flat" (no SPLITs,
+	// all here paths globally unique, no scalar-array terminals, ≤1 deeper
+	// here-group), so the executor uses evalFlatRawAndAll. Raw AndAll
+	// preserves leaf-precise same-element semantics via the analyzer's scalar
+	// inheritance — make on cars[K] inherits cars[K].elementPositions, which
+	// equals the descendant leaves (incl. tires.width's leaf) when descendants
+	// exist. Different physical cars at the same K live at disjoint leaves so
+	// the cross-instance false positive is naturally rejected by raw AndAll.
 	//
-	// Bug: matchElementRecursive uses MaskLeafAnd, which strips leaf bits before
-	// ANDing per-condition bitmaps. When _idx.cars[K] lumps multiple physical
-	// cars (e.g., g[0].cars[0] and g[1].cars[0] both at K=0), MaskLeafAnd loses
-	// the leaf-level distinction that would have rejected cross-physical-instance
-	// matches. The doc with make in g[0].cars[0] and tires in g[1].cars[0]
-	// incorrectly matches.
-	//
-	// Asserts CURRENT (buggy) behavior so a future fix gets caught and the
-	// expected list updated to just {idMatch}.
-	t.Run("SameKDifferentParent_with_subs_make_AND_tires_BUG", func(t *testing.T) {
+	// Discriminating shapes:
+	//   - same physical car has both → match
+	//   - split garages, same K=0 → reject (different physical cars under
+	//     g[0] vs g[1] have disjoint leaves)
+	//   - different K within same garage → reject
+	//   - only one condition → reject
+	t.Run("SameKDifferentParent_with_subs_make_AND_tires", func(t *testing.T) {
 		idMatch := uuid(1)
-		idBuggyMatchSplitGaragesSameK := uuid(2)
+		idNoMatchSplitGaragesSameK := uuid(2)
 		idNoMatchSplitCarsSameGarage := uuid(3)
 		idNoMatchOnlyMake := uuid(4)
 		docs := []docDef{
 			{id: idMatch, props: map[string]any{"countries": asArr(
 				country(garage(nil, map[string]any{"make": "honda", "tires": asArr(tire("205"))})),
-			)}, note: "correct: single car has both"},
-			{id: idBuggyMatchSplitGaragesSameK, props: map[string]any{"countries": asArr(
+			)}, note: "single car has both"},
+			{id: idNoMatchSplitGaragesSameK, props: map[string]any{"countries": asArr(
 				country(
 					garage(nil, map[string]any{"make": "honda"}),
 					garage(nil, map[string]any{"tires": asArr(tire("205"))}),
 				),
-			)}, note: "BUG: make in g[0].cars[0]; tires in g[1].cars[0] — currently matches; should reject"},
+			)}, note: "make in g[0].cars[0]; tires in g[1].cars[0] — same K=0, different garages"},
 			{id: idNoMatchSplitCarsSameGarage, props: map[string]any{"countries": asArr(
 				country(garage(nil,
 					map[string]any{"make": "honda"},
 					map[string]any{"tires": asArr(tire("205"))},
 				)),
-			)}, note: "different K within same garage — correctly rejects"},
+			)}, note: "different K within same garage"},
 			{id: idNoMatchOnlyMake, props: map[string]any{"countries": asArr(
 				country(garage(nil, map[string]any{"make": "honda"})),
-			)}, note: "only one condition — rejects"},
+			)}, note: "only one condition"},
 		}
 		parts := []*filters.LocalFilter{
 			valueFilter("countries.garages.cars.make", "honda"),
 			valueFilter("countries.garages.cars.tires.width", "205"),
 		}
-		runOrderings(t, docs, parts, []strfmt.UUID{idMatch, idBuggyMatchSplitGaragesSameK})
+		runOrderings(t, docs, parts, []strfmt.UUID{idMatch})
 	})
 }
