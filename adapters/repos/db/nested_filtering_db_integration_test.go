@@ -7513,44 +7513,50 @@ func TestNestedFilteringCorrelatedAndFilterExamplesIndexed(t *testing.T) {
 	// countries.garages.cars.tags = "sport". Two filter conditions on the
 	// same multi-value text[] field with different values.
 	//
-	// Observed behavior: same-element correlation enforces same-car within a
-	// garage, but NOT across garages. Documented as-is — this is the current
-	// behavior of same-path multi-value AND.
+	// Same-element semantics at the LCA (cars): both values must be on the
+	// same physical car's tags array.
+	//
+	// Plan: GROUP@cars { here:[tags=electric, tags=sport], subs:[] }. Has
+	// duplicate here paths → groupSubtreeNeedsOuterScope returns true →
+	// the wrapping outer GROUP@garages is preserved. Hierarchical
+	// runIdxLoopRecursive enforces same-car semantics: outer iterates
+	// _idx.garages[K_g], inner iterates _idx.garages.cars[K_c] AND
+	// parent_scope, evaluating both tag values within each physical car.
 	//
 	//   - same car has both tags                         → match
-	//   - same garage, different cars                    → reject (per-car AND)
-	//   - same country, different garages, one tag each  → match (no per-garage AND)
-	//   - only one tag anywhere                          → reject (each filter must hit)
+	//   - same country, different garages, one tag each  → reject (different cars)
+	//   - same garage, different cars                    → reject (different cars)
+	//   - only one tag anywhere                          → reject
 	t.Run("F_tags_double_value_cars.tags=electric_AND_cars.tags=sport", func(t *testing.T) {
 		idMatch := uuid(1)
-		idMatchSplitGarages := uuid(2)
+		idNoMatchSplitGarages := uuid(2)
 		idNoMatchOnlyOne := uuid(3)
 		idNoMatchSplitCars := uuid(4)
 		docs := []docDef{
 			{id: idMatch, props: map[string]any{"countries": asArr(
 				country(garage(nil, map[string]any{"tags": []any{"electric", "sport"}})),
 			)}, note: "single car has both tags"},
-			{id: idMatchSplitGarages, props: map[string]any{"countries": asArr(
+			{id: idNoMatchSplitGarages, props: map[string]any{"countries": asArr(
 				country(
 					garage(nil, map[string]any{"tags": []any{"electric"}}),
 					garage(nil, map[string]any{"tags": []any{"sport"}}),
 				),
-			)}, note: "tags split across g[0].cars[0]/g[1].cars[0] — currently matches"},
+			)}, note: "tags split across g[0].cars[0]/g[1].cars[0] — different physical cars"},
 			{id: idNoMatchOnlyOne, props: map[string]any{"countries": asArr(
 				country(garage(nil, map[string]any{"tags": []any{"electric"}})),
-			)}, note: "only one tag in country — fails the second filter"},
+			)}, note: "only one tag in country"},
 			{id: idNoMatchSplitCars, props: map[string]any{"countries": asArr(
 				country(garage(nil,
 					map[string]any{"tags": []any{"electric"}},
 					map[string]any{"tags": []any{"sport"}},
 				)),
-			)}, note: "tags split across cars[0]/cars[1] of same garage — per-car AND rejects"},
+			)}, note: "tags split across cars[0]/cars[1] of same garage"},
 		}
 		parts := []*filters.LocalFilter{
 			valueFilter("countries.garages.cars.tags", "electric"),
 			valueFilter("countries.garages.cars.tags", "sport"),
 		}
-		runOrderings(t, docs, parts, []strfmt.UUID{idMatch, idMatchSplitGarages})
+		runOrderings(t, docs, parts, []strfmt.UUID{idMatch})
 	})
 
 	// SameKDifferentParent_with_subs: regression test for the flat-AndAll path

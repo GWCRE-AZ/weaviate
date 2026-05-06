@@ -200,11 +200,17 @@ func needsWrappingGroup(scope string, sub recPlanNode) bool {
 // groupSubtreeNeedsOuterScope reports whether g (or any descendant
 // recGroupNode in g's subtree) will use runIdxLoopRecursive — which requires
 // the immediate ancestor's _idx scope to disambiguate same-K-different-parent
-// physical instances. A non-root recGroupNode uses runIdxLoopRecursive when
-// it has ≥2 subs (the flat raw-AndAll path bails on multi-sub since sibling
-// sub-arrays produce conditions at distinct leaves with no inheritance bridge).
+// physical instances. A non-root recGroupNode uses runIdxLoopRecursive when:
+//
+//   - It has ≥2 subs (the flat raw-AndAll path bails on multi-sub since
+//     sibling sub-arrays produce conditions at distinct leaves with no
+//     inheritance bridge).
+//   - It has duplicate here paths (same-path values land at distinct leaves
+//     per walkScalarArray, so canUseRawAndAll is false and the flat path
+//     bails). Same-element semantics for these requires per-element _idx
+//     iteration scoped by the outer parent.
 func groupSubtreeNeedsOuterScope(g *recGroupNode) bool {
-	if g.lcaPath != "" && len(g.subs) >= 2 {
+	if g.lcaPath != "" && (len(g.subs) >= 2 || hasDuplicateHerePaths(g)) {
 		return true
 	}
 	for _, sub := range g.subs {
@@ -215,6 +221,25 @@ func groupSubtreeNeedsOuterScope(g *recGroupNode) bool {
 		}
 		// recSplitNode descendants handle their own scoping at their level
 		// via needsWrappingGroup invocations during their own buildPlan.
+	}
+	return false
+}
+
+// hasDuplicateHerePaths reports whether two or more here entries in g share
+// the same childRelPath. Each text[]/scalar-array value lives at a distinct
+// leaf assigned by walkScalarArray, so duplicate-path filters cannot match
+// at the same leaf via raw AndAll — they need per-element evaluation.
+func hasDuplicateHerePaths(g *recGroupNode) bool {
+	if len(g.here) < 2 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(g.here))
+	for _, leaf := range g.here {
+		path := childRelPath(leaf)
+		if _, dup := seen[path]; dup {
+			return true
+		}
+		seen[path] = struct{}{}
 	}
 	return false
 }
