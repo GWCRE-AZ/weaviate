@@ -12560,16 +12560,13 @@ func TestNestedFilteringDeeplyNestedAndOrTree(t *testing.T) {
 	// countries (object[]) root
 	// =========================================================================
 
-	// TODO aliszka:nested_filtering: locks in CURRENT docID-level AND-of-OR
-	// behavior at the outer-AND boundary across multiple root elements.
-	// Two discriminator docs (idTeslaWithBerlinInSecondCountry,
-	// idTeslaInOneCountryBerlinInAnother) currently match because the
-	// outer AND treats the OR as a docID-level set — tesla in one
-	// country and berlin in another satisfies docID-level intersection.
-	// Under the planned OR-in-AND distribution rewrite, both would stop
-	// matching: each distributed branch (`tesla AND berlin`,
-	// `tesla AND munich AND 80331`) requires same-country semantics.
-	// Same root cause as regression_AND_of_OR_universal_docID_level_simple.
+	// regression_countries_array_3level_AND_OR_innerAND — same-element
+	// AND at countries[]: a single countries entry must have tesla AND
+	// satisfy the OR (berlin OR (munich AND 80331)). Discriminator docs
+	// (tesla in one country, berlin in another) drop OUT because no
+	// single country satisfies both legs. Same root cause as
+	// TestNestedFilteringAndOfOrRegression's same-car semantics, applied
+	// at the countries[] LCA.
 	t.Run("regression_countries_array_3level_AND_OR_innerAND", func(t *testing.T) {
 		idTeslaPlusBerlin := uuid(1)
 		idTeslaPlusMunich80331 := uuid(2)
@@ -12607,9 +12604,11 @@ func TestNestedFilteringDeeplyNestedAndOrTree(t *testing.T) {
 				),
 			),
 		)
+		// idTeslaWithBerlinInSecondCountry and
+		// idTeslaInOneCountryBerlinInAnother drop OUT — no single
+		// country has tesla AND satisfies the OR.
 		runScenario(t, docs, filter, []strfmt.UUID{
 			idTeslaPlusBerlin, idTeslaPlusMunich80331,
-			idTeslaWithBerlinInSecondCountry, idTeslaInOneCountryBerlinInAnother,
 		})
 	})
 }
