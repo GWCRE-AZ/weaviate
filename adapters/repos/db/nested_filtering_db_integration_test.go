@@ -19586,17 +19586,11 @@ func TestNestedFilteringContainsAllOrCrossElement3Levels(t *testing.T) {
 //
 //	cars.make=tesla AND (cars.color=red OR cars.accessories.type=sunroof)
 //
-// Today's OR resolves at docID — the two branches each compute a
-// docID set independently and union — so same-cars-element
-// correlation does not propagate across the OR. A doc whose tesla
-// car has neither red nor sunroof but a non-tesla sibling supplies
-// red or sunroof still matches.
-//
-// Under position-level OR within a single nested root, the two OR
-// branches project up to their deepest common ancestor (cars[]) and
-// OR per cars element. The outer AND with cars.make=tesla then
-// requires the same cars element to satisfy both make=tesla and
-// (color=red OR has-sunroof-accessory). Cross-cars docs flip OUT.
+// The planner plants the OR at cars[] (deepest common LCA of color
+// and accessories). The outer AND with cars.make=tesla then
+// correlates same-element at cars[]: a single tesla car must satisfy
+// both make=tesla and (color=red OR has-sunroof-accessory). Cross-
+// cars docs (where the OR is satisfied via a non-tesla car) drop out.
 //
 // This is a parent-child-depth variant of gap #4 (sibling sub-array
 // depths). The flip pattern is the same; the test exists to prove
@@ -19687,17 +19681,14 @@ func TestNestedFilteringOrInAndDifferentSubArrayDepths3Levels(t *testing.T) {
 			return &filters.LocalFilter{Root: &filters.Clause{Operator: filters.OperatorOr, Operands: ops}}
 		}
 
-		// TODO aliszka:nested_filtering: locks in CURRENT
-		// docID-level OR with operands at different sub-array
-		// depths (cars[] vs cars.accessories[]). The OR's branches
-		// independently produce docID sets that union, so the
-		// surrounding AND with cars.make=tesla intersects at docID
-		// without enforcing same-cars-element correlation across
-		// the OR. Under position-level OR within a single nested
-		// root, both branches project to cars[] LCA and OR
-		// per-element; the outer AND then requires the same car to
-		// satisfy both make=tesla and (color=red OR has-sunroof
-		// accessory). Cross-cars docs flip OUT.
+		// regression_OR_in_AND_different_sub_array_depths — same-element
+		// AND at cars[]: a single tesla car must satisfy both legs of
+		// the OR (color=red OR has-sunroof-accessory). The depth
+		// difference between the OR's branches (cars[] vs
+		// cars.accessories[]) is resolved by the planner planting the
+		// OR at cars[] — their deepest common LCA — so cross-cars docs
+		// drop out regardless of which OR branch the non-tesla car
+		// satisfies.
 		t.Run("regression_OR_in_AND_different_sub_array_depths", func(t *testing.T) {
 			db := createTestDatabaseWithClass(t, monitoring.GetMetrics(), class)
 			ctx := context.Background()
@@ -19759,21 +19750,15 @@ func TestNestedFilteringOrInAndDifferentSubArrayDepths3Levels(t *testing.T) {
 			{id: idEmpty, props: map[string]any{}, note: "no cars"},
 		}
 
+		// Same-element AND at cars[]: only tesla cars that themselves
+		// satisfy the OR match. idTeslaBlueBmwRed (color branch
+		// satisfied via bmw) and idTeslaBlueBmwSunroof (accessory
+		// branch satisfied via bmw) both drop — the different-depth
+		// branches collapse to the same per-car contract.
 		runLevel(t, className, class,
 			"cars.make", "cars.color", "cars.accessories.type",
 			docs,
-			// today: tesla anywhere AND (red anywhere OR sunroof
-			// in any accessory anywhere).
-			[]strfmt.UUID{idTeslaRed, idTeslaSunroof, idTeslaBlueBmwRed, idTeslaBlueBmwSunroof},
-			// expected after position-level OR within single root:
-			// []strfmt.UUID{idTeslaRed, idTeslaSunroof}
-			//   (idTeslaBlueBmwRed flips OUT — tesla car has no
-			//   red and no sunroof; bmw has red but isn't tesla.
-			//   idTeslaBlueBmwSunroof flips OUT — tesla car has
-			//   no sunroof in its accessories; bmw has sunroof
-			//   but isn't tesla. Different-depth branch
-			//   (accessories) collapses the same way as the
-			//   sibling-depth branch (color).)
+			[]strfmt.UUID{idTeslaRed, idTeslaSunroof},
 		)
 	})
 
@@ -19819,20 +19804,13 @@ func TestNestedFilteringOrInAndDifferentSubArrayDepths3Levels(t *testing.T) {
 			{id: idTeslaBlueBmwSunroofSplitGarages, props: wrapG(garage(car("tesla", "blue")), garage(car("bmw", "blue", accessory("sunroof")))), note: "g0=tesla; g1=bmw with sunroof — split accessory"},
 		}
 
+		// Every cross-car split — same garage or different garages,
+		// color-branch or accessory-branch — drops out. Only docs
+		// whose tesla car itself satisfies the OR survive.
 		runLevel(t, className, class,
 			"garages.cars.make", "garages.cars.color", "garages.cars.accessories.type",
 			docs,
-			// today
-			[]strfmt.UUID{
-				idTeslaRed, idTeslaSunroof,
-				idTeslaBlueBmwRedSameGarage, idTeslaBlueBmwSunroofSameGarage,
-				idTeslaBlueBmwRedSplitGarages, idTeslaBlueBmwSunroofSplitGarages,
-			},
-			// expected after position-level OR:
-			// []strfmt.UUID{idTeslaRed, idTeslaSunroof}
-			//   (every cross-car split — same garage or different
-			//   garages, color-branch or accessory-branch — flips
-			//   OUT. Only single-car satisfaction survives.)
+			[]strfmt.UUID{idTeslaRed, idTeslaSunroof},
 		)
 	})
 
@@ -19887,26 +19865,15 @@ func TestNestedFilteringOrInAndDifferentSubArrayDepths3Levels(t *testing.T) {
 			{id: idTeslaBlueBmwSunroofSplitCountries, props: wrapC(country(garage(car("tesla", "blue"))), country(garage(car("bmw", "blue", accessory("sunroof"))))), note: "split across countries — accessory"},
 		}
 
+		// Position-level OR within cars[] LCA combined with same-cars-
+		// element AND semantics is uniform regardless of where in the
+		// nested hierarchy the mixed elements live: same garage,
+		// different garages, or different countries — every cross-car
+		// split drops out via either branch.
 		runLevel(t, className, class,
 			"countries.garages.cars.make", "countries.garages.cars.color", "countries.garages.cars.accessories.type",
 			docs,
-			// today: docID-level OR + AND across the entire
-			// countries.garages.cars hierarchy regardless of
-			// layout.
-			[]strfmt.UUID{
-				idTeslaRed, idTeslaSunroof,
-				idTeslaBlueBmwRedSameGarage, idTeslaBlueBmwSunroofSameGarage,
-				idTeslaBlueBmwRedSplitGarages, idTeslaBlueBmwSunroofSplitGarages,
-				idTeslaBlueBmwRedSplitCountries, idTeslaBlueBmwSunroofSplitCountries,
-			},
-			// expected after position-level OR:
-			// []strfmt.UUID{idTeslaRed, idTeslaSunroof}
-			//   (all cross-car splits — same garage, different
-			//   garages, different countries; color or accessory
-			//   branch — flip OUT. Position-level OR within
-			//   cars[] LCA combined with same-cars-element AND
-			//   semantics is uniform regardless of where in the
-			//   nested hierarchy the mixed elements live.)
+			[]strfmt.UUID{idTeslaRed, idTeslaSunroof},
 		)
 	})
 }
