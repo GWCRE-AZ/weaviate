@@ -12823,17 +12823,12 @@ func TestNestedFilteringOperatorSweep(t *testing.T) {
 //   - ContainsAny  → OR  of Equal clauses
 //   - ContainsNone → NOT(OR of Equal clauses)
 //
-// CURRENT BEHAVIOR — OBSERVED 2026-05-07:
-//
-// ContainsAll on a nested array path performs **docID-level AND** — it
-// intersects the "doc has A anywhere" set with "doc has B anywhere".
-// This means a doc whose nested elements collectively cover both values
-// matches even if no single element contains both. Sub-tests where the
-// path traverses one or more object[] levels are marked
-// regression_ContainsAll: under a future planner improvement that
-// recognizes same-path AND as a correlated AND, these would tighten to
-// same-element AND and the discriminator docs would stop matching. See
-// plan_contains_all_same_element_semantics for the fix direction.
+// ContainsAll on a nested array path performs **same-element AND** at
+// the deepest-LCA element: it requires a single element of that LCA to
+// contain every listed value. Sub-tests where the path traverses one or
+// more object[] levels are kept under the regression_ContainsAll name
+// (they were the discriminators that flipped when the same-path AND
+// correlation landed) and now lock in the per-element contract.
 //
 // ContainsAny resolves at docID level (matches if any element has any
 // listed value) — natural existential semantics, no regression marker.
@@ -13053,16 +13048,12 @@ func TestNestedFilteringContainsOperators(t *testing.T) {
 				)), note: "g0.tags=[muscle]"},
 				{id: d5, props: map[string]any{"country": map[string]any{}}, note: "empty country"},
 			}
-			// TODO aliszka:nested_filtering: locks in CURRENT docID-level AND
-			// for ContainsAll on a same-path pair where the array prop sits
-			// inside one object[] level (garages). d2 (split-garages within
-			// the single country) currently matches because the doc has both
-			// 'sport' and 'luxury' somewhere; under the planned same-path
-			// correlated-AND fix, only d1 (single garage with both) would
-			// match.
+			// regression_ContainsAll — same-element AND at garages[]:
+			// requires a single garage to contain both 'sport' and
+			// 'luxury'. d2 (split-garages) flips out.
 			t.Run("regression_ContainsAll", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("country.garages.tags", filters.ContainsAll, "sport", "luxury"),
-					[]strfmt.UUID{d1, d2})
+					[]strfmt.UUID{d1})
 			})
 			t.Run("ContainsAny", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("country.garages.tags", filters.ContainsAny, "sport", "luxury"),
@@ -13100,14 +13091,13 @@ func TestNestedFilteringContainsOperators(t *testing.T) {
 				)), note: "g0.city='boston'"},
 				{id: d5, props: map[string]any{"country": map[string]any{}}, note: "empty country"},
 			}
-			// TODO aliszka:nested_filtering: same shape as L1_garages_tags
-			// regression_ContainsAll — locks in CURRENT docID-level AND
-			// under one object[] level. d2 (split tokens across garages)
-			// currently matches; under same-path correlated-AND fix only d1
-			// (both tokens in single garage's city) would match.
+			// regression_ContainsAll — same shape as L1_garages_tags
+			// regression_ContainsAll, applied to word-tokenized text:
+			// both tokens must live in a single garage's city. d2
+			// (split tokens across garages) flips out.
 			t.Run("regression_ContainsAll", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("country.garages.city", filters.ContainsAll, "new", "york"),
-					[]strfmt.UUID{d1, d2})
+					[]strfmt.UUID{d1})
 			})
 			t.Run("ContainsAny", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("country.garages.city", filters.ContainsAny, "new", "york"),
@@ -13146,14 +13136,12 @@ func TestNestedFilteringContainsOperators(t *testing.T) {
 				)), note: "g0.cars[0].tags=[muscle]"},
 				{id: d6, props: map[string]any{"country": map[string]any{}}, note: "empty country"},
 			}
-			// TODO aliszka:nested_filtering: locks in CURRENT docID-level AND
-			// for ContainsAll under two object[] levels. d2 (split-cars in
-			// single garage) and d3 (split-garages in single country) match
-			// because the doc has both values somewhere; under same-path
-			// correlated-AND fix only d1 (single car with both) would match.
+			// regression_ContainsAll — same-element AND at cars[]:
+			// requires a single car to contain both tags. d2 (split-
+			// cars in single garage) and d3 (split-garages) flip out.
 			t.Run("regression_ContainsAll", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("country.garages.cars.tags", filters.ContainsAll, "sport", "luxury"),
-					[]strfmt.UUID{d1, d2, d3})
+					[]strfmt.UUID{d1})
 			})
 			t.Run("ContainsAny", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("country.garages.cars.tags", filters.ContainsAny, "sport", "luxury"),
@@ -13191,13 +13179,13 @@ func TestNestedFilteringContainsOperators(t *testing.T) {
 				)), note: "make='boston' (neither)"},
 				{id: d6, props: map[string]any{"country": map[string]any{}}, note: "empty country"},
 			}
-			// TODO aliszka:nested_filtering: same shape as L2_cars_tags
-			// regression_ContainsAll — locks in CURRENT docID-level AND
-			// under two object[] levels. Splits across cars/garages match
-			// today; same-path correlated-AND fix would tighten to d1 only.
+			// regression_ContainsAll — same shape as L2_cars_tags
+			// regression_ContainsAll, applied to word-tokenized text:
+			// both tokens must live in a single car's make field. d2
+			// (split-cars) and d3 (split-garages) flip out.
 			t.Run("regression_ContainsAll", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("country.garages.cars.make", filters.ContainsAll, "new", "york"),
-					[]strfmt.UUID{d1, d2, d3})
+					[]strfmt.UUID{d1})
 			})
 			t.Run("ContainsAny", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("country.garages.cars.make", filters.ContainsAny, "new", "york"),
@@ -13231,14 +13219,12 @@ func TestNestedFilteringContainsOperators(t *testing.T) {
 				{id: d4, props: wrapCountries(countryBody("", []string{"muscle"})), note: "[muscle]"},
 				{id: d5, props: map[string]any{"countries": []any{}}, note: "empty countries"},
 			}
-			// TODO aliszka:nested_filtering: locks in CURRENT docID-level AND
-			// for ContainsAll under one object[] level (countries). d2
-			// (split-countries) currently matches because the doc has both
-			// 'sport' and 'luxury' somewhere; under same-path correlated-AND
-			// fix only d1 (single country with both tags) would match.
+			// regression_ContainsAll — same-element AND at countries[]:
+			// requires a single country to contain both tags. d2
+			// (split-countries) flips out.
 			t.Run("regression_ContainsAll", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("countries.tags", filters.ContainsAll, "sport", "luxury"),
-					[]strfmt.UUID{d1, d2})
+					[]strfmt.UUID{d1})
 			})
 			t.Run("ContainsAny", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("countries.tags", filters.ContainsAny, "sport", "luxury"),
@@ -13267,13 +13253,13 @@ func TestNestedFilteringContainsOperators(t *testing.T) {
 				{id: d4, props: wrapCountries(countryBody("boston", nil)), note: "boston"},
 				{id: d5, props: map[string]any{"countries": []any{}}, note: "empty countries"},
 			}
-			// TODO aliszka:nested_filtering: same shape as L0_tags
-			// regression_ContainsAll — docID-level AND under one object[]
-			// level. d2 (split-countries) currently matches; fix would
-			// tighten to d1 only.
+			// regression_ContainsAll — same shape as L0_tags
+			// regression_ContainsAll, applied to word-tokenized text:
+			// both tokens must live in a single country's name. d2
+			// (split-countries) flips out.
 			t.Run("regression_ContainsAll", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("countries.name", filters.ContainsAll, "new", "york"),
-					[]strfmt.UUID{d1, d2})
+					[]strfmt.UUID{d1})
 			})
 			t.Run("ContainsAny", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("countries.name", filters.ContainsAny, "new", "york"),
@@ -13311,13 +13297,13 @@ func TestNestedFilteringContainsOperators(t *testing.T) {
 				)), note: "[muscle]"},
 				{id: d6, props: map[string]any{"countries": []any{}}, note: "empty countries"},
 			}
-			// TODO aliszka:nested_filtering: locks in CURRENT docID-level AND
-			// for ContainsAll under two object[] levels. d2 (split-garages
-			// in single country) and d3 (split-countries) currently match;
-			// fix to same-path correlated-AND would tighten to d1 only.
+			// regression_ContainsAll — same-element AND at garages[]:
+			// requires a single garage to contain both tags. d2
+			// (split-garages in single country) and d3 (split-countries)
+			// flip out.
 			t.Run("regression_ContainsAll", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("countries.garages.tags", filters.ContainsAll, "sport", "luxury"),
-					[]strfmt.UUID{d1, d2, d3})
+					[]strfmt.UUID{d1})
 			})
 			t.Run("ContainsAny", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("countries.garages.tags", filters.ContainsAny, "sport", "luxury"),
@@ -13349,13 +13335,13 @@ func TestNestedFilteringContainsOperators(t *testing.T) {
 				{id: d5, props: wrapCountries(countryBody("", nil, garage("boston", nil))), note: "boston"},
 				{id: d6, props: map[string]any{"countries": []any{}}, note: "empty countries"},
 			}
-			// TODO aliszka:nested_filtering: same shape as L1_garages_tags
-			// regression_ContainsAll — docID-level AND under two object[]
-			// levels. Splits across garages or countries currently match;
-			// fix tightens to single-garage matches only.
+			// regression_ContainsAll — same shape as L1_garages_tags
+			// regression_ContainsAll, applied to word-tokenized text:
+			// both tokens must live in a single garage's city. d2
+			// (split-garages) and d3 (split-countries) flip out.
 			t.Run("regression_ContainsAll", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("countries.garages.city", filters.ContainsAll, "new", "york"),
-					[]strfmt.UUID{d1, d2, d3})
+					[]strfmt.UUID{d1})
 			})
 			t.Run("ContainsAny", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("countries.garages.city", filters.ContainsAny, "new", "york"),
@@ -13395,14 +13381,13 @@ func TestNestedFilteringContainsOperators(t *testing.T) {
 				)), note: "[muscle]"},
 				{id: d7, props: map[string]any{"countries": []any{}}, note: "empty countries"},
 			}
-			// TODO aliszka:nested_filtering: locks in CURRENT docID-level AND
-			// for ContainsAll under three object[] levels. All three split
-			// shapes (split-cars, split-garages, split-countries) currently
-			// match; fix to same-path correlated-AND would tighten to d1
-			// only (single car with both tags).
+			// regression_ContainsAll — same-element AND at cars[]:
+			// requires a single car to contain both tags. d2
+			// (split-cars), d3 (split-garages), d4 (split-countries)
+			// all flip out.
 			t.Run("regression_ContainsAll", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("countries.garages.cars.tags", filters.ContainsAll, "sport", "luxury"),
-					[]strfmt.UUID{d1, d2, d3, d4})
+					[]strfmt.UUID{d1})
 			})
 			t.Run("ContainsAny", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("countries.garages.cars.tags", filters.ContainsAny, "sport", "luxury"),
@@ -13443,13 +13428,14 @@ func TestNestedFilteringContainsOperators(t *testing.T) {
 				)), note: "make='boston' (neither)"},
 				{id: d7, props: map[string]any{"countries": []any{}}, note: "empty countries"},
 			}
-			// TODO aliszka:nested_filtering: same shape as L2_cars_tags
-			// regression_ContainsAll — docID-level AND under three object[]
-			// levels. Splits across cars/garages/countries match today; fix
-			// would tighten to d1 only.
+			// regression_ContainsAll — same shape as L2_cars_tags
+			// regression_ContainsAll, applied to word-tokenized text:
+			// both tokens must live in a single car's make field.
+			// d2 (split-cars), d3 (split-garages), d4 (split-countries)
+			// all flip out.
 			t.Run("regression_ContainsAll", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("countries.garages.cars.make", filters.ContainsAll, "new", "york"),
-					[]strfmt.UUID{d1, d2, d3, d4})
+					[]strfmt.UUID{d1})
 			})
 			t.Run("ContainsAny", func(t *testing.T) {
 				runScenario(t, docs, containsFilter("countries.garages.cars.make", filters.ContainsAny, "new", "york"),
