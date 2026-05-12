@@ -19326,17 +19326,11 @@ func TestNestedFilteringNotContextSensitivity3Levels(t *testing.T) {
 }
 
 // TestNestedFilteringContainsAllOrCrossElement3Levels covers gap #7:
-// `cars.tags ContainsAll ["a","b"] OR cars.color=red` — locks in
-// today's docID-level ContainsAll (synthesized AND of same-path
-// Equals resolves at docID, so the two values can come from
-// different cars) combined with docID-level OR.
-//
-// Under the planned "correlated ContainsAll" rewrite, ContainsAll's
-// synthesized AND inherits the parent's same-element grouping
-// rule — both values must live on a single cars element. Docs that
-// satisfy ContainsAll only via cross-element splits flip OUT of the
-// ContainsAll branch; the OR with color=red still admits docs that
-// have red anywhere.
+// `cars.tags ContainsAll ["a","b"] OR cars.color=red`. The ContainsAll
+// branch correlates same-element at cars[] — both values must live on
+// a single car. Docs that satisfy ContainsAll only via cross-element
+// splits no longer match through the ContainsAll branch; the OR with
+// color=red still admits docs that have red anywhere.
 func TestNestedFilteringContainsAllOrCrossElement3Levels(t *testing.T) {
 	vTrue := true
 	tok := models.NestedPropertyTokenizationField
@@ -19416,16 +19410,11 @@ func TestNestedFilteringContainsAllOrCrossElement3Levels(t *testing.T) {
 			return &filters.LocalFilter{Root: &filters.Clause{Operator: filters.OperatorOr, Operands: ops}}
 		}
 
-		// TODO aliszka:nested_filtering: locks in CURRENT
-		// ContainsAll-as-docID-level-AND combined with OR. The
-		// ContainsAll branch matches docs that have both tag values
-		// somewhere across the cars hierarchy (potentially in
-		// different cars or different garages/countries). The OR
-		// adds docs whose cars contain color=red. Under correlated
-		// ContainsAll, only docs with a single car having BOTH tags
-		// satisfy the ContainsAll branch — cross-element split docs
-		// flip OUT of that branch and only stay in the result if
-		// the OR's color=red branch admits them.
+		// regression_ContainsAll_OR_cross_element — ContainsAll
+		// requires both tags on a single car (same-element AND at
+		// cars[]). Cross-element split docs no longer satisfy the
+		// ContainsAll branch; they remain only if the OR's
+		// color=red branch admits them.
 		t.Run("regression_ContainsAll_OR_cross_element", func(t *testing.T) {
 			db := createTestDatabaseWithClass(t, monitoring.GetMetrics(), class)
 			ctx := context.Background()
@@ -19484,22 +19473,19 @@ func TestNestedFilteringContainsAllOrCrossElement3Levels(t *testing.T) {
 			{id: idSplitTagsButRed, props: wrap(car("blue", "a"), car("red", "b")), note: "tags split, red in cars[1]"},
 		}
 
+		// ContainsAll(cars.tags, [a,b]) same-element at cars[]:
+		// only single-car-with-both matches via the ContainsAll
+		// branch. The OR's color=red branch independently admits
+		// docs that have red anywhere. idSplitTagsAcrossCars
+		// (split tags, no red) flips OUT; idSplitTagsButRed
+		// stays IN via the OR branch.
 		runLevel(t, className, class,
 			"cars.tags", "cars.color",
 			docs,
-			// today: ContainsAll docID-level (a anywhere AND b
-			// anywhere) ∪ red anywhere.
 			[]strfmt.UUID{
-				idSingleCarBothTags, idSplitTagsAcrossCars,
-				idOnlyAWithRed, idSingleCarBothTagsRed, idSplitTagsButRed,
+				idSingleCarBothTags, idOnlyAWithRed,
+				idSingleCarBothTagsRed, idSplitTagsButRed,
 			},
-			// expected after correlated ContainsAll:
-			// []strfmt.UUID{idSingleCarBothTags, idOnlyAWithRed,
-			//               idSingleCarBothTagsRed,
-			//               idSplitTagsButRed}
-			//   (idSplitTagsAcrossCars flips OUT — no single car
-			//   has both tags AND no red. idSplitTagsButRed stays
-			//   IN via the OR's red branch.)
 		)
 	})
 
@@ -19543,24 +19529,19 @@ func TestNestedFilteringContainsAllOrCrossElement3Levels(t *testing.T) {
 			{id: idSplitTagsAcrossGarages, props: wrapG(garage(car("blue", "a")), garage(car("blue", "b"))), note: "g0={a}; g1={b} — L1 KEY"},
 		}
 
+		// ContainsAll(garages.cars.tags, [a,b]) same-element at
+		// cars[]. idSplitTagsSameGarage (split-cars within one
+		// garage) and idSplitTagsAcrossGarages (split across
+		// garages) both flip OUT — no single car has both tags.
+		// idSplitTagsSameGarageButRed stays IN via the OR's
+		// color=red branch.
 		runLevel(t, className, class,
 			"garages.cars.tags", "garages.cars.color",
 			docs,
-			// today: ContainsAll docID across all cars regardless
-			// of garage layout.
 			[]strfmt.UUID{
-				idSingleCarBothTags, idSplitTagsSameGarage,
-				idOnlyAWithRed, idSingleCarBothTagsRed,
-				idSplitTagsSameGarageButRed, idSplitTagsAcrossGarages,
+				idSingleCarBothTags, idOnlyAWithRed,
+				idSingleCarBothTagsRed, idSplitTagsSameGarageButRed,
 			},
-			// expected after correlated ContainsAll:
-			// []strfmt.UUID{idSingleCarBothTags, idOnlyAWithRed,
-			//               idSingleCarBothTagsRed,
-			//               idSplitTagsSameGarageButRed}
-			//   (idSplitTagsSameGarage and idSplitTagsAcrossGarages
-			//   flip OUT — neither has a single car with both
-			//   tags. idSplitTagsSameGarageButRed stays IN via
-			//   red.)
 		)
 	})
 
@@ -19611,26 +19592,18 @@ func TestNestedFilteringContainsAllOrCrossElement3Levels(t *testing.T) {
 			{id: idSplitTagsAcrossCountries, props: wrapC(country(garage(car("blue", "a"))), country(garage(car("blue", "b")))), note: "split across countries — L2 KEY"},
 		}
 
+		// ContainsAll(countries.garages.cars.tags, [a,b]) same-element
+		// at cars[]. Every cross-car split — same garage, different
+		// garages, different countries — flips OUT. Only the
+		// single-car-with-both-tags docs and the docs admitted by
+		// the OR's color=red branch survive.
 		runLevel(t, className, class,
 			"countries.garages.cars.tags", "countries.garages.cars.color",
 			docs,
-			// today: ContainsAll docID-level across the entire
-			// countries.garages.cars hierarchy regardless of
-			// layout.
 			[]strfmt.UUID{
-				idSingleCarBothTags, idSplitTagsSameGarage,
-				idOnlyAWithRed, idSingleCarBothTagsRed,
-				idSplitTagsSameGarageButRed, idSplitTagsAcrossGarages,
-				idSplitTagsAcrossCountries,
+				idSingleCarBothTags, idOnlyAWithRed,
+				idSingleCarBothTagsRed, idSplitTagsSameGarageButRed,
 			},
-			// expected after correlated ContainsAll:
-			// []strfmt.UUID{idSingleCarBothTags, idOnlyAWithRed,
-			//               idSingleCarBothTagsRed,
-			//               idSplitTagsSameGarageButRed}
-			//   (every cross-car split — same garage, different
-			//   garages, or different countries — flips OUT.
-			//   Only docs whose single car has both tags or has
-			//   color=red survive.)
 		)
 	})
 }
