@@ -20684,15 +20684,13 @@ func TestNestedFilteringIntraSubArrayOrCrossSubArrayAnd3Levels(t *testing.T) {
 			return &filters.LocalFilter{Root: &filters.Clause{Operator: filters.OperatorOr, Operands: ops}}
 		}
 
-		// TODO aliszka:nested_filtering: locks in CURRENT docID-level
-		// OR with both branches at the same deep sub-array
-		// (cars.tires) combined with cross-sub-array AND
-		// (cars.accessories). Today the OR returns a docID set; the
-		// outer AND intersects at docID without enforcing same-
-		// cars-element correlation across the OR boundary. Under
-		// position-level evaluation, the cars.tires OR is per-tire,
-		// projects up to cars[], and the outer AND requires the
-		// same car to have a matching tire AND a spoiler accessory.
+		// regression_intra_subarray_OR_cross_subarray_AND —
+		// same-element AND at cars[]. The OR's branches (both at
+		// cars.tires[]) project up to cars[], and the outer AND with
+		// cars.accessories.type=spoiler requires the same car to
+		// have both a matching tire and a spoiler accessory. Cross-
+		// cars docs (spoiler in one car, qualifying tire in another)
+		// drop out.
 		t.Run("regression_intra_subarray_OR_cross_subarray_AND", func(t *testing.T) {
 			db := createTestDatabaseWithClass(t, monitoring.GetMetrics(), class)
 			ctx := context.Background()
@@ -20760,16 +20758,12 @@ func TestNestedFilteringIntraSubArrayOrCrossSubArrayAnd3Levels(t *testing.T) {
 			{id: idEmpty, props: map[string]any{}, note: "no cars"},
 		}
 
+		// Cross-cars splits drop out — no single car has spoiler
+		// AND a 205-or-pirelli tire.
 		runLevel(t, className, class,
 			"cars.accessories.type", "cars.tires.width", "cars.tires.brand",
 			docs,
-			// today: (205 anywhere OR pirelli anywhere) AND
-			// spoiler anywhere.
-			[]strfmt.UUID{idSpoiler205, idSpoilerPirelli, idSplitSpoilerVs205, idSplitSpoilerVsPirelli},
-			// expected after position-level evaluation:
-			// []strfmt.UUID{idSpoiler205, idSpoilerPirelli}
-			//   (both cross-cars splits flip OUT — no single car
-			//   has spoiler AND a 205-or-pirelli tire.)
+			[]strfmt.UUID{idSpoiler205, idSpoilerPirelli},
 		)
 	})
 
@@ -20822,19 +20816,12 @@ func TestNestedFilteringIntraSubArrayOrCrossSubArrayAnd3Levels(t *testing.T) {
 			), note: "split garages — KEY"},
 		}
 
+		// All cross-cars splits — same garage or different garages —
+		// drop out.
 		runLevel(t, className, class,
 			"garages.cars.accessories.type", "garages.cars.tires.width", "garages.cars.tires.brand",
 			docs,
-			// today
-			[]strfmt.UUID{
-				idSpoiler205, idSpoilerPirelli,
-				idSplitSpoilerVs205SameGarage, idSplitSpoilerVsPirelliSameGarage,
-				idSplitSpoilerVs205SplitGarages,
-			},
-			// expected after position-level evaluation:
-			// []strfmt.UUID{idSpoiler205, idSpoilerPirelli}
-			//   (all cross-cars splits — same garage or different
-			//   garages — flip OUT.)
+			[]strfmt.UUID{idSpoiler205, idSpoilerPirelli},
 		)
 	})
 
@@ -20897,19 +20884,12 @@ func TestNestedFilteringIntraSubArrayOrCrossSubArrayAnd3Levels(t *testing.T) {
 			), note: "split across countries — L2 KEY"},
 		}
 
+		// All cross-cars splits — same garage, different garages,
+		// different countries — drop out.
 		runLevel(t, className, class,
 			"countries.garages.cars.accessories.type", "countries.garages.cars.tires.width", "countries.garages.cars.tires.brand",
 			docs,
-			// today
-			[]strfmt.UUID{
-				idSpoiler205, idSpoilerPirelli,
-				idSplitSpoilerVs205SameGarage, idSplitSpoilerVsPirelliSameGarage,
-				idSplitSpoilerVs205SplitGarages, idSplitSpoilerVs205SplitCountries,
-			},
-			// expected after position-level evaluation:
-			// []strfmt.UUID{idSpoiler205, idSpoilerPirelli}
-			//   (all cross-cars splits — same garage, different
-			//   garages, different countries — flip OUT.)
+			[]strfmt.UUID{idSpoiler205, idSpoilerPirelli},
 		)
 	})
 }
