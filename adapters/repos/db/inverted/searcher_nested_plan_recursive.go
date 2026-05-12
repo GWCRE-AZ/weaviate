@@ -428,13 +428,24 @@ func needsWrappingGroup(scope string, sub recPlanNode) bool {
 //     per walkScalarArray, so canUseRawAndAll is false and the flat path
 //     bails). Same-element semantics for these requires per-element _idx
 //     iteration scoped by the outer parent.
+//   - It has an operator sub (recOrNode / recNotNode). canUseRawAndAll
+//     bails on any sub; collectFlatSubtree bails on non-recGroupNode
+//     subs. So an operator sub forces runIdxLoopRecursive too, and the
+//     idx loop needs outer scope to disambiguate same-K-different-parent
+//     instances at every intermediate object[] level above the group's
+//     LCA — root_idx alone only disambiguates the outermost level.
 func groupSubtreeNeedsOuterScope(g *recGroupNode) bool {
 	if g.lca != "" && (len(g.subs) >= 2 || hasDuplicateHerePaths(g)) {
 		return true
 	}
 	for _, sub := range g.subs {
-		if grp, ok := sub.(*recGroupNode); ok {
-			if groupSubtreeNeedsOuterScope(grp) {
+		switch s := sub.(type) {
+		case *recOrNode, *recNotNode:
+			if g.lca != "" {
+				return true
+			}
+		case *recGroupNode:
+			if groupSubtreeNeedsOuterScope(s) {
 				return true
 			}
 		}
