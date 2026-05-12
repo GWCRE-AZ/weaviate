@@ -19997,15 +19997,12 @@ func TestNestedFilteringAndDeepWithOrThreeDepths3Levels(t *testing.T) {
 			return &filters.LocalFilter{Root: &filters.Clause{Operator: filters.OperatorOr, Operands: ops}}
 		}
 
-		// TODO aliszka:nested_filtering: locks in CURRENT docID-level
-		// OR + AND with operands at three different sub-array depths
-		// inside cars[]. Today the OR's two branches independently
-		// produce docID sets and the outer AND with the depth-2
-		// accessories sibling intersects at docID — no same-cars-
-		// element correlation across the OR boundary or across the
-		// depth-1/depth-2 sibling boundary. Under position-level
-		// evaluation, all three operands project to cars[] LCA and
-		// combine per cars element; cross-cars docs flip OUT.
+		// regression_AND_deep_with_OR_three_depths — same-element AND
+		// at cars[]. Operands at three different sub-array depths
+		// (cars.accessories[], cars.tires[], cars.colors as text[])
+		// all project to cars[] LCA. A single car must satisfy the
+		// outer AND's spoiler accessory together with either 205-tire
+		// or red-color leg of the OR. Cross-cars docs drop out.
 		t.Run("regression_AND_deep_with_OR_three_depths", func(t *testing.T) {
 			db := createTestDatabaseWithClass(t, monitoring.GetMetrics(), class)
 			ctx := context.Background()
@@ -20073,17 +20070,12 @@ func TestNestedFilteringAndDeepWithOrThreeDepths3Levels(t *testing.T) {
 			{id: idEmpty, props: map[string]any{}, note: "no cars"},
 		}
 
+		// Cross-cars docs drop out — no single car has spoiler AND
+		// (205 or red).
 		runLevel(t, className, class,
 			"cars.accessories.type", "cars.tires.width", "cars.colors",
 			docs,
-			// today: spoiler anywhere AND (205 anywhere OR red
-			// anywhere).
-			[]strfmt.UUID{idSpoilerWith205, idSpoilerWithRed, idSplitSpoilerVs205, idSplitSpoilerVsRed},
-			// expected after position-level evaluation:
-			// []strfmt.UUID{idSpoilerWith205, idSpoilerWithRed}
-			//   (idSplitSpoilerVs205 and idSplitSpoilerVsRed flip
-			//   OUT — neither has a single car with spoiler AND
-			//   either 205 or red.)
+			[]strfmt.UUID{idSpoilerWith205, idSpoilerWithRed},
 		)
 	})
 
@@ -20136,19 +20128,12 @@ func TestNestedFilteringAndDeepWithOrThreeDepths3Levels(t *testing.T) {
 			), note: "g0=spoiler,200; g1=205 — split garages KEY"},
 		}
 
+		// All cross-car splits — same garage or different garages —
+		// drop out.
 		runLevel(t, className, class,
 			"garages.cars.accessories.type", "garages.cars.tires.width", "garages.cars.colors",
 			docs,
-			// today
-			[]strfmt.UUID{
-				idSpoilerWith205, idSpoilerWithRed,
-				idSplitSpoilerVs205SameGarage, idSplitSpoilerVsRedSameGarage,
-				idSplitSpoilerVs205SplitGarages,
-			},
-			// expected after position-level evaluation:
-			// []strfmt.UUID{idSpoilerWith205, idSpoilerWithRed}
-			//   (every cross-car split — same garage or different
-			//   garages — flips OUT.)
+			[]strfmt.UUID{idSpoilerWith205, idSpoilerWithRed},
 		)
 	})
 
@@ -20211,19 +20196,12 @@ func TestNestedFilteringAndDeepWithOrThreeDepths3Levels(t *testing.T) {
 			), note: "split across countries — L2 KEY"},
 		}
 
+		// All cross-car splits — same garage, different garages,
+		// different countries — drop out.
 		runLevel(t, className, class,
 			"countries.garages.cars.accessories.type", "countries.garages.cars.tires.width", "countries.garages.cars.colors",
 			docs,
-			// today
-			[]strfmt.UUID{
-				idSpoilerWith205, idSpoilerWithRed,
-				idSplitSpoilerVs205SameGarage, idSplitSpoilerVsRedSameGarage,
-				idSplitSpoilerVs205SplitGarages, idSplitSpoilerVs205SplitCountries,
-			},
-			// expected after position-level evaluation:
-			// []strfmt.UUID{idSpoilerWith205, idSpoilerWithRed}
-			//   (all cross-car splits — same garage, different
-			//   garages, different countries — flip OUT.)
+			[]strfmt.UUID{idSpoilerWith205, idSpoilerWithRed},
 		)
 	})
 }
