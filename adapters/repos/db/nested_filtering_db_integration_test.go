@@ -18688,34 +18688,24 @@ func TestNestedFilteringAndParenthesization3Levels(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		// TODO aliszka:nested_filtering: locks in CURRENT flat 3-AND
-		// behavior — same-element correlation across all three
-		// operands at one cars[] LCA. Only docs with a single car
-		// satisfying make=tesla AND year=2020 AND color=red match.
-		// Under associative AND flattening this is the canonical
-		// result that all three forms collapse to.
+		// flat 3-AND: same-element correlation across all three operands
+		// at one cars[] LCA. Only docs with a single car satisfying
+		// make=tesla AND year=2020 AND color=red match.
 		t.Run("regression_flat_3_and", func(t *testing.T) {
 			runScenario(t, andF(makeF(), yearF(), colorF()), wantFlat)
 		})
 
-		// TODO aliszka:nested_filtering: locks in CURRENT
-		// left-grouped behavior — inner (make AND year) correlates
-		// at cars[], producing a docID set; outer AND with color=red
-		// intersects at docID. Cars satisfying inner and cars with
-		// color=red can be different elements. Under associative
-		// AND flattening this collapses to the flat plan.
+		// left-grouped: (make AND year) AND color. The planner's
+		// associative AND flattening collapses this to the flat plan,
+		// so the result matches regression_flat_3_and (same-element
+		// correlation across all three operands at cars[] LCA).
 		t.Run("regression_left_grouped_and", func(t *testing.T) {
 			runScenario(t, andF(andF(makeF(), yearF()), colorF()), wantLeft)
 		})
 
-		// TODO aliszka:nested_filtering: locks in CURRENT
-		// right-grouped behavior — inner (year AND color) correlates
-		// at cars[]; outer AND with make=tesla intersects at docID.
-		// Different from left-grouped on docs where the inner pair
-		// can only be satisfied by one shape (e.g., year+color in a
-		// non-tesla car) but the outer leaf is satisfied by another
-		// car. Under associative AND flattening this collapses to
-		// the flat plan.
+		// right-grouped: make AND (year AND color). Same AND associative
+		// flattening as left-grouped — collapses to the flat plan and
+		// produces the same most-restrictive result.
 		t.Run("regression_right_grouped_and", func(t *testing.T) {
 			runScenario(t, andF(makeF(), andF(yearF(), colorF())), wantRight)
 		})
@@ -18766,20 +18756,17 @@ func TestNestedFilteringAndParenthesization3Levels(t *testing.T) {
 			{id: idEmpty, props: map[string]any{}, note: "no cars"},
 		}
 
+		// Per associative AND flattening at the planner, all three forms
+		// (flat, left-grouped, right-grouped) collapse to the same
+		// single-car-satisfies-all result. The discriminator docs (
+		// idSplitTeslaYearVsRed / idLeftOnly / idRightOnly) are kept
+		// to prove no form leaks them.
 		runLevel(t, className, class,
 			"cars.make", "cars.year", "cars.color",
 			docs,
-			// today flat: only single-car-all-3.
-			[]strfmt.UUID{idAllInOne},
-			// today left-grouped: inner (tesla AND 2020) correlated;
-			// outer AND color=red docID-intersect. Mixed docs where
-			// some car has tesla+2020 AND some car has red satisfy.
-			[]strfmt.UUID{idAllInOne, idSplitTeslaYearVsRed, idLeftOnly},
-			// today right-grouped: inner (2020 AND red) correlated;
-			// outer AND make=tesla docID-intersect.
-			[]strfmt.UUID{idAllInOne, idSplitTeslaYearVsRed, idRightOnly},
-			// expected after AND associative flattening: all three
-			// forms collapse to the flat plan -> []strfmt.UUID{idAllInOne}.
+			[]strfmt.UUID{idAllInOne}, // flat
+			[]strfmt.UUID{idAllInOne}, // left — flattens to flat
+			[]strfmt.UUID{idAllInOne}, // right — flattens to flat
 		)
 	})
 
@@ -18823,19 +18810,15 @@ func TestNestedFilteringAndParenthesization3Levels(t *testing.T) {
 			{id: idSplitTeslaYearVsRedSplitGarages, props: wrapG(garage(car("tesla", 2020, "blue")), garage(car("bmw", 2020, "red"))), note: "g[0]=[tesla,2020]; g[1]=[bmw,red]"},
 		}
 
+		// All three forms collapse to the flat plan; discriminator docs
+		// (split-same-garage / left-only / right-only / split-garages)
+		// stay in the doc set to prove no form leaks them.
 		runLevel(t, className, class,
 			"garages.cars.make", "garages.cars.year", "garages.cars.color",
 			docs,
-			// today flat: single-car all 3 (anywhere in any garage).
-			[]strfmt.UUID{idAllInOne},
-			// today left-grouped: inner (make AND year) correlates
-			// at the cars LCA; outer AND color=red docID. Mixed
-			// satisfies regardless of garage split.
-			[]strfmt.UUID{idAllInOne, idSplitTeslaYearVsRedSameGarage, idLeftOnlySameGarage, idSplitTeslaYearVsRedSplitGarages},
-			// today right-grouped.
-			[]strfmt.UUID{idAllInOne, idSplitTeslaYearVsRedSameGarage, idRightOnlySameGarage, idSplitTeslaYearVsRedSplitGarages},
-			// expected after AND associative flattening:
-			// []strfmt.UUID{idAllInOne}.
+			[]strfmt.UUID{idAllInOne}, // flat
+			[]strfmt.UUID{idAllInOne}, // left — flattens to flat
+			[]strfmt.UUID{idAllInOne}, // right — flattens to flat
 		)
 	})
 
@@ -18886,20 +18869,16 @@ func TestNestedFilteringAndParenthesization3Levels(t *testing.T) {
 			{id: idSplitTeslaYearVsRedSplitCountries, props: wrapC(country(garage(car("tesla", 2020, "blue"))), country(garage(car("bmw", 2020, "red")))), note: "split across countries — L2 KEY"},
 		}
 
+		// All three forms collapse to the flat plan; discriminator docs
+		// (split-same-garage / left-only / right-only / split-garages /
+		// split-countries) stay in the doc set to prove no form leaks
+		// them.
 		runLevel(t, className, class,
 			"countries.garages.cars.make", "countries.garages.cars.year", "countries.garages.cars.color",
 			docs,
-			// today flat
-			[]strfmt.UUID{idAllInOne},
-			// today left-grouped: docID intersection ignores the
-			// cross-country split.
-			[]strfmt.UUID{idAllInOne, idSplitTeslaYearVsRedSameGarage, idLeftOnlySameGarage, idSplitTeslaYearVsRedSplitGarages, idSplitTeslaYearVsRedSplitCountries},
-			// today right-grouped
-			[]strfmt.UUID{idAllInOne, idSplitTeslaYearVsRedSameGarage, idRightOnlySameGarage, idSplitTeslaYearVsRedSplitGarages, idSplitTeslaYearVsRedSplitCountries},
-			// expected after AND associative flattening:
-			// []strfmt.UUID{idAllInOne} — at all 3 levels the three
-			// forms agree on the most restrictive (single-car-
-			// all-3) result.
+			[]strfmt.UUID{idAllInOne}, // flat
+			[]strfmt.UUID{idAllInOne}, // left — flattens to flat
+			[]strfmt.UUID{idAllInOne}, // right — flattens to flat
 		)
 	})
 }
