@@ -11698,28 +11698,17 @@ func TestNestedFilteringOrOfCorrelatedAndsWithArrN(t *testing.T) {
 	})
 }
 
-// TestNestedFilteringAndOfOrRegression locks in the *current* docID-level
-// semantics of `A AND (B OR C)` for nested-leaf paths. Today the OR child
-// resolves to a docID set independently and the outer AND intersects at
-// docID level — same-element correlation does NOT propagate across the OR
-// boundary. See OR-in-AND distribution rewrite for the proposed
-// fix (distribute OR over AND at extractPropValuePair time, giving same-
-// element semantics per DNF branch).
-//
-// The discriminator docs (idDiscriminator*) currently MATCH because the
-// dispatch only requires "honda exists somewhere AND (205 or 225 exists
-// somewhere)". Under per-element AND-of-OR (the proposed direction), they
-// would NOT match because no single car satisfies (honda AND 205) or
-// (honda AND 225).
-//
-// When OR distribution lands, this test will fail and the expected list
-// must flip from [idSameCarMatch, idSameCarMatchAlt, idDiscriminatorSplit*,
-// idDiscriminatorAcrossCars] (current docID-level) to
-// [idSameCarMatch, idSameCarMatchAlt] (per-element).
+// TestNestedFilteringAndOfOrRegression verifies the per-element semantics
+// of `A AND (B OR C)` for nested-leaf paths. Same-element correlation
+// propagates across the OR boundary via the planner's LCA pushdown: the
+// OR is planted inside the same cars[] subgroup as the AND's other leg,
+// so the AND demands a single car satisfying make=honda together with
+// width=205 or width=225 in that same car. Discriminator docs (with
+// honda and 205/225 in different cars) do NOT match.
 //
 // A companion sub-test in TestNestedFilteringComprehensive
-// (`complex_make_bmw_AND_OR_tires_OR_accessories`) carries an inline
-// cross-reference comment pointing back to this regression test.
+// (`complex_make_bmw_AND_OR_tires_OR_accessories`) follows the same
+// per-element rule.
 func TestNestedFilteringAndOfOrRegression(t *testing.T) {
 	const nestedClass = "AndOfOrRegression"
 	vTrue := true
@@ -11822,20 +11811,10 @@ func TestNestedFilteringAndOfOrRegression(t *testing.T) {
 
 	// Filter: cars.make = "honda" AND (cars.tires.width = 205 OR cars.tires.width = 225)
 	//
-	// Current (docID-level): match if SOME car has honda AND SOME car has
-	// (205 or 225) — honda and width may be in different cars.
-	//
-	// Per-element (proposed): match if SOME car has both honda AND (205 or
-	// 225) at that same car. Equivalent to distributing the OR:
-	//   (cars.make=honda AND cars.tires.width=205)
-	//      OR (cars.make=honda AND cars.tires.width=225)
-	//
-	// TODO aliszka:nested_filtering: locks in CURRENT docID-level AND-of-OR
-	// behavior. Flips when OR distribution lands
-	// (OR-in-AND distribution rewrite) — discriminator docs
-	// (idDiscriminatorSplit205, idDiscriminatorSplit225,
-	// idDiscriminatorAcrossCars) stop matching, expected list shrinks to
-	// [idSameCarMatch, idSameCarMatchAlt] (per-element same-car).
+	// Per-element: match if SOME car has both honda AND (205 or 225) at
+	// that same car. The discriminator docs (honda and 205/225 in
+	// different cars) do not match because no single car satisfies both
+	// legs of the AND.
 	t.Run("regression_AND_of_OR_universal_docID_level_simple", func(t *testing.T) {
 		idSameCarMatch := uuid(1)            // [{honda,205}] — both interpretations: match
 		idSameCarMatchAlt := uuid(2)         // [{honda,225}] — both: match
@@ -11862,12 +11841,12 @@ func TestNestedFilteringAndOfOrRegression(t *testing.T) {
 				intFilter("doc.cars.tires.width", 225),
 			),
 		)
-		// Current: discriminators match (docID-level intersection succeeds).
-		// Per-element (after distribution): only the same-car matches survive.
-		// Expected list must flip if OR distribution lands.
+		// Per-element same-car: only the docs whose single car satisfies
+		// both legs survive. Discriminator docs (idDiscriminatorSplit205,
+		// idDiscriminatorSplit225, idDiscriminatorAcrossCars) stay in the
+		// doc set to prove the AND does not propagate across cars.
 		runScenario(t, docs, filter, []strfmt.UUID{
 			idSameCarMatch, idSameCarMatchAlt,
-			idDiscriminatorSplit205, idDiscriminatorSplit225, idDiscriminatorAcrossCars,
 		})
 	})
 
