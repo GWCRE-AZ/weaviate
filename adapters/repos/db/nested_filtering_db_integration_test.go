@@ -16561,18 +16561,14 @@ func TestNestedFilteringNotInsideOrInsideAnd3Levels(t *testing.T) {
 //	(<chain>.cars.color=red OR
 //	 (<chain>.cars.year=2022 AND NOT <chain>.cars.tires.width=205))
 //
-// Today's dispatch: docID-level for the OR boundary and the NOT.
-// Inner AND `(year=2022 AND NOT tires.width=205)` resolves at docID:
-// doc has 2022 car AND doc has no 205 tire (anywhere). Outer OR with
-// `color=red` at docID: doc has (red car) OR (2022 car AND no 205 tire).
-// Outer AND with tesla: doc has tesla AND that disjunction.
-//
-// Future scope-aware NOT + position-level OR within single root: NOT D
-// inverts at cars.tires (operand LCA), projects to cars (cars with
-// non-205 tire). Inner AND at cars: cars where year=2022 AND has
-// non-205 tire. Outer OR at cars: cars where color=red OR (year=2022
-// AND non-205 tire). Outer AND with tesla at cars: tesla cars
-// satisfying that disjunction. Per-car evaluation throughout.
+// The entire expression evaluates per-car at cars[] LCA: NOT inverts
+// at cars.tires (operand LCA) and projects to cars (cars with at
+// least one non-205 tire); inner AND at cars (cars where year=2022
+// AND has a non-205 tire); outer OR at cars (cars where color=red OR
+// inner-AND); outer AND with tesla at cars (tesla cars satisfying
+// that disjunction). Cross-cars docs that today satisfy via different
+// cars (e.g. red on a non-tesla car) flip OUT; mixed-tires and
+// good-tesla-sibling docs that today fail the doc-level NOT flip IN.
 //
 // Three nesting levels with object[] roots: L0_root_cars,
 // L1_garages_cars, L2_countries_garages_cars.
@@ -16700,13 +16696,12 @@ func TestNestedFilteringDeeplyNestedAndOrNotSameRoot3Levels(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		// TODO aliszka:nested_filtering: locks in CURRENT docID-level
-		// dispatch for the 3-level AND/OR/AND/NOT structure. Inner AND
-		// resolves at docID; OR combines at docID; outer AND combines
-		// at docID. Under scope-aware NOT + position-level OR within a
-		// single root, the entire expression evaluates per-cars-element
-		// at cars LCA, giving stricter (or sometimes more permissive)
-		// results depending on doc shape.
+		// regression_AND_OR_AND_NOT_3level — same-cars-element AND
+		// through the OR, with scope-aware NOT at cars.tires. The
+		// entire 3-level AND/OR/AND/NOT evaluates per tesla car.
+		// Bad-tesla-plus-red-on-non-tesla docs flip OUT; mixed-tires
+		// (has both 205 and non-205 on one car) and bad-plus-good-
+		// tesla docs flip IN.
 		t.Run("regression_AND_OR_AND_NOT_3level", func(t *testing.T) {
 			runScenario(t, andF(
 				textF(makePath, "tesla"),
@@ -16761,23 +16756,18 @@ func TestNestedFilteringDeeplyNestedAndOrNotSameRoot3Levels(t *testing.T) {
 			{id: idEmpty, props: emptyDoc(), note: "no cars"},
 		}
 
+		// idTeslaBadPlusBmwRed (red on non-tesla car) flips to excl;
+		// idTeslaBlue2022Mixed (mixed tires on a single car) and
+		// idTeslaBadPlusGoodTesla (good-tesla sibling) flip to
+		// match — per-car evaluation throughout.
 		runLevel(t, className, class,
 			"cars.make", "cars.color", "cars.year", "cars.tires.width",
 			docs,
-			// today: tesla AND (red car OR (2022 car AND no 205 tire)).
 			[]strfmt.UUID{
-				idTeslaRed2022_205, idTeslaBlue2022_225, idTeslaRed2018_225,
-				idTeslaBadPlusBmwRed,
+				idTeslaRed2022_205, idTeslaBlue2022_225,
+				idTeslaBlue2022Mixed, idTeslaRed2018_225,
+				idTeslaBadPlusGoodTesla,
 			},
-			// expected after scope-aware NOT + position-level OR:
-			// []strfmt.UUID{idTeslaRed2022_205, idTeslaBlue2022_225,
-			//               idTeslaBlue2022Mixed, idTeslaRed2018_225,
-			//               idTeslaBadPlusGoodTesla}
-			//   (idTeslaBadPlusBmwRed flips to excl — no single tesla
-			//   car satisfies (red OR (2022 AND non-205 tire));
-			//   idTeslaBlue2022Mixed and idTeslaBadPlusGoodTesla flip
-			//   to match — at least one tesla car has 2022 AND has a
-			//   non-205 tire same-car.)
 		)
 	})
 
@@ -16830,21 +16820,18 @@ func TestNestedFilteringDeeplyNestedAndOrNotSameRoot3Levels(t *testing.T) {
 			{id: idSplitGaragesBadPlusGoodTesla, props: wrapG(garage(car("tesla", "blue", 2022, tire(205))), garage(car("tesla", "blue", 2022, tire(225)))), note: "g[0]=tesla bad; g[1]=tesla good — L1 KEY"},
 		}
 
+		// bad+bmw-red docs flip to excl regardless of whether the
+		// bmw is in the same garage or a different garage; mixed-
+		// tires and bad+good-tesla docs flip to match likewise.
 		runLevel(t, className, class,
 			"garages.cars.make", "garages.cars.color", "garages.cars.year", "garages.cars.tires.width",
 			docs,
-			// today
 			[]strfmt.UUID{
-				idTeslaRed2022_205, idTeslaBlue2022_225, idTeslaRed2018_225,
-				idTeslaBadPlusBmwRedSameGarage, idSplitGaragesBadPlusBmwRed,
+				idTeslaRed2022_205, idTeslaBlue2022_225,
+				idTeslaBlue2022Mixed, idTeslaRed2018_225,
+				idTeslaBadPlusGoodTeslaSameGarage,
+				idSplitGaragesBadPlusGoodTesla,
 			},
-			// expected after scope-aware NOT + position-level OR:
-			// []strfmt.UUID{idTeslaRed2022_205, idTeslaBlue2022_225,
-			//               idTeslaBlue2022Mixed, idTeslaRed2018_225,
-			//               idTeslaBadPlusGoodTeslaSameGarage,
-			//               idSplitGaragesBadPlusGoodTesla}
-			//   (bad+bmw-red docs flip to excl; mixed-tires and
-			//   bad+good-tesla docs flip to match.)
 		)
 	})
 
@@ -16906,23 +16893,20 @@ func TestNestedFilteringDeeplyNestedAndOrNotSameRoot3Levels(t *testing.T) {
 			{id: idSplitCountriesBadPlusGoodTesla, props: wrapC(country(garage(car("tesla", "blue", 2022, tire(205)))), country(garage(car("tesla", "blue", 2022, tire(225))))), note: "split countries bad+good tesla — L2 KEY"},
 		}
 
+		// bad+bmw-red docs flip to excl across every split layout
+		// (same garage, different garages, different countries);
+		// mixed-tires and bad+good-tesla docs flip to match
+		// likewise.
 		runLevel(t, className, class,
 			"countries.garages.cars.make", "countries.garages.cars.color", "countries.garages.cars.year", "countries.garages.cars.tires.width",
 			docs,
-			// today
 			[]strfmt.UUID{
-				idTeslaRed2022_205, idTeslaBlue2022_225, idTeslaRed2018_225,
-				idTeslaBadPlusBmwRedSameGarage, idSplitGaragesBadPlusBmwRed,
-				idSplitCountriesBadPlusBmwRed,
+				idTeslaRed2022_205, idTeslaBlue2022_225,
+				idTeslaBlue2022Mixed, idTeslaRed2018_225,
+				idTeslaBadPlusGoodTeslaSameGarage,
+				idSplitGaragesBadPlusGoodTesla,
+				idSplitCountriesBadPlusGoodTesla,
 			},
-			// expected after scope-aware NOT + position-level OR:
-			// []strfmt.UUID{idTeslaRed2022_205, idTeslaBlue2022_225,
-			//               idTeslaBlue2022Mixed, idTeslaRed2018_225,
-			//               idTeslaBadPlusGoodTeslaSameGarage,
-			//               idSplitGaragesBadPlusGoodTesla,
-			//               idSplitCountriesBadPlusGoodTesla}
-			//   (bad+bmw-red docs at all splits flip to excl; mixed and
-			//   bad+good-tesla docs at all splits flip to match.)
 		)
 	})
 }
