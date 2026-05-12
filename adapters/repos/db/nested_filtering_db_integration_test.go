@@ -9713,20 +9713,16 @@ func TestNestedFilteringComprehensive(t *testing.T) {
 					textFilter(pk+".cars.make", "honda"),
 				), []strfmt.UUID{d1, d4})
 			})
-			// TODO aliszka:nested_filtering: this sub-test asserts CURRENT
-			// docID-level AND-of-OR behavior. The d2 expectation (cars[0]=bmw
-			// alone, cars[1]=tires+accessories alone) depends on AND not
-			// propagating same-element correlation across the OR boundary.
-			// When OR distribution lands (OR-in-AND distribution rewrite),
-			// d2 will no longer match — only docs with a single car satisfying
-			// (bmw AND 205) or (bmw AND sunroof) would match.
-			// See TestNestedFilteringAndOfOrRegression for a dedicated
-			// discriminator test.
+			// Same-cars-element AND of OR: a single car must satisfy bmw
+			// AND (205 OR sunroof). d2 (bmw in cars[0], tires/acc in
+			// cars[1]) and d3 in docs_array (bmw in docs[0], tires/acc
+			// in docs[1]) drop. See TestNestedFilteringAndOfOrRegression
+			// for a dedicated discriminator test.
 			t.Run("complex_make_bmw_AND_OR_tires_OR_accessories", func(t *testing.T) {
 				runFilter(t, andFilter(
 					textFilter(pk+".cars.make", "bmw"),
 					orFilter(intFilter(pk+".cars.tires.width", 205), textFilter(pk+".cars.accessories.type", "sunroof")),
-				), want([]strfmt.UUID{d1, d2}, []strfmt.UUID{d1, d2, d3}))
+				), []strfmt.UUID{d1})
 			})
 			t.Run("complex_make_AND_tires_AND_addresses_all_same_root", func(t *testing.T) {
 				runFilter(t, andFilter(
@@ -9735,19 +9731,17 @@ func TestNestedFilteringComprehensive(t *testing.T) {
 					textFilter(pk+".addresses.city", "berlin"),
 				), []strfmt.UUID{d1})
 			})
-			// TODO aliszka:nested_filtering: this sub-test asserts CURRENT
-			// docID-level AND-of-OR behavior. d3 in docs_array variant has
-			// bmw in docs[0] and berlin in docs[1] (cross-root) — currently
-			// matches via docID-level intersection. When OR distribution
-			// lands (OR-in-AND distribution rewrite), the
-			// rewritten filter `(bmw AND berlin) OR (honda AND berlin)`
-			// requires same-root for each branch, so d3 (docs_array) would
-			// no longer match. doc_object expectation unchanged (single root).
+			// Same-element AND of (bmw OR honda) with berlin requires
+			// single doc-body (doc_object) or single docs[N]
+			// (docs_array) to have both. doc_object's d3 has bmw+berlin
+			// in one body so it stays in; docs_array's d3 has bmw and
+			// berlin in different docs[N] so it drops out. doc_object
+			// expectation unchanged (single root).
 			t.Run("complex_OR_makes_AND_addresses", func(t *testing.T) {
 				runFilter(t, andFilter(
 					orFilter(textFilter(pk+".cars.make", "bmw"), textFilter(pk+".cars.make", "honda")),
 					textFilter(pk+".addresses.city", "berlin"),
-				), []strfmt.UUID{d1, d3, d4})
+				), want([]strfmt.UUID{d1, d3, d4}, []strfmt.UUID{d1, d4}))
 			})
 			t.Run("complex_4clause_tags_make_tires_accessories", func(t *testing.T) {
 				runFilter(t, andFilter(
