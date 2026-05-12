@@ -16937,19 +16937,13 @@ func TestNestedFilteringDeeplyNestedAndOrNotSameRoot3Levels(t *testing.T) {
 //	<chain>.cars.make=tesla
 //
 // The OR branches target two sibling sub-arrays (accessories, tires)
-// under cars. They have NO common ancestor below cars — diverging at
-// the cars level.
-//
-// Today (docID-level OR): each branch resolves to a docID set;
-// OR unions; AND with tesla intersects at docID. Doc matches when
-// it has a tesla car AND (sunroof somewhere OR 205 tire somewhere) —
-// the OR can be satisfied by ANY car, not necessarily a tesla.
-//
-// Future (position-level OR within single root): both branches
-// project up to cars LCA; OR at cars (cars where some accessory is
-// sunroof OR some tire is 205); AND with tesla at cars (tesla cars
-// satisfying the OR). Per-tesla-car evaluation — strictly tighter
-// than today when the OR is satisfied via a non-tesla car.
+// under cars; their deepest common LCA is cars. The planner plants
+// the OR inside the cars subgroup so the outer AND with
+// cars.make=tesla correlates same-element at cars[]: a single tesla
+// car must satisfy the OR. Cross-car docs (where the OR is satisfied
+// via a non-tesla car) drop out, regardless of whether the non-tesla
+// car is in the same garage, a different garage, or a different
+// country.
 //
 // Three nesting levels with object[] roots: L0_root_cars,
 // L1_garages_cars, L2_countries_garages_cars.
@@ -17073,17 +17067,10 @@ func TestNestedFilteringDisjointSubArraysOrInAnd3Levels(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		// TODO aliszka:nested_filtering: locks in CURRENT docID-level OR
-		// for disjoint sibling sub-arrays. Branches at cars.accessories
-		// and cars.tires resolve independently to docID sets and union
-		// at docID. AND with cars.make=tesla intersects at docID. Doc
-		// matches when tesla car exists AND OR satisfied by any car.
-		//
-		// Under position-level OR within a single root, both branches
-		// project up to cars LCA, OR per-cars-element, AND with tesla
-		// at cars. Doc matches only when a tesla car itself satisfies
-		// the OR. Discriminator docs where the OR is satisfied via a
-		// non-tesla car flip to excl.
+		// regression_OR_disjoint_sub_arrays_in_AND — same-element AND at
+		// cars[]: a single tesla car must satisfy the OR. Discriminator
+		// docs (cross-car splits) drop out — the non-tesla car
+		// satisfying the OR doesn't count.
 		t.Run("regression_OR_disjoint_sub_arrays_in_AND", func(t *testing.T) {
 			runScenario(t, andF(
 				orF(
@@ -17131,20 +17118,16 @@ func TestNestedFilteringDisjointSubArraysOrInAnd3Levels(t *testing.T) {
 			{id: idEmpty, props: emptyDoc(), note: "no cars"},
 		}
 
+		// Same-element AND at cars[]: only tesla cars that themselves
+		// satisfy the OR match. idTeslaNothingPlusBmwSunroof /
+		// idTeslaNothingPlusBmw205 drop out — their tesla cars are
+		// empty; the bmw car satisfies the OR but isn't tesla.
 		runLevel(t, className, class,
 			"cars.make", "cars.accessories.type", "cars.tires.width",
 			docs,
-			// today: tesla AND (sunroof somewhere OR 205 somewhere).
 			[]strfmt.UUID{
 				idTeslaSunroof205, idTeslaSunroofOnly, idTesla205Only,
-				idTeslaNothingPlusBmwSunroof, idTeslaNothingPlusBmw205,
 			},
-			// expected after position-level OR within single root:
-			// []strfmt.UUID{idTeslaSunroof205, idTeslaSunroofOnly,
-			//               idTesla205Only}
-			//   (idTeslaNothingPlusBmwSunroof and idTeslaNothingPlusBmw205
-			//   flip to excl — no tesla car satisfies the OR; the
-			//   non-tesla car satisfies OR but isn't tesla.)
 		)
 	})
 
@@ -17191,21 +17174,15 @@ func TestNestedFilteringDisjointSubArraysOrInAnd3Levels(t *testing.T) {
 			{id: idSplitGaragesTeslaPlusBmwSunroof, props: wrapG(garage(car("tesla", nil, nil)), garage(car("bmw", []map[string]any{accessory("sunroof")}, nil))), note: "g[0]=tesla nothing; g[1]=bmw sunroof — L1 KEY"},
 		}
 
+		// Same-element AND at cars[]: cross-car docs drop out regardless
+		// of whether the non-tesla car is in the same garage as the
+		// tesla or a different one (idSplitGaragesTeslaPlusBmwSunroof).
 		runLevel(t, className, class,
 			"garages.cars.make", "garages.cars.accessories.type", "garages.cars.tires.width",
 			docs,
-			// today
 			[]strfmt.UUID{
 				idTeslaSunroof205, idTeslaSunroofOnly, idTesla205Only,
-				idTeslaNothingPlusBmwSunroofSameGarage,
-				idTeslaNothingPlusBmw205SameGarage,
-				idSplitGaragesTeslaPlusBmwSunroof,
 			},
-			// expected after position-level OR within single root:
-			// []strfmt.UUID{idTeslaSunroof205, idTeslaSunroofOnly,
-			//               idTesla205Only}
-			//   (cross-car docs flip to excl regardless of whether the
-			//   non-tesla car is in the same garage or a different one.)
 		)
 	})
 
@@ -17259,23 +17236,17 @@ func TestNestedFilteringDisjointSubArraysOrInAnd3Levels(t *testing.T) {
 			{id: idSplitCountriesTeslaPlusBmwSunroof, props: wrapC(country(garage(car("tesla", nil, nil))), country(garage(car("bmw", []map[string]any{accessory("sunroof")}, nil)))), note: "split across countries — L2 KEY"},
 		}
 
+		// Same-element AND at cars[]: cross-car docs drop out regardless
+		// of whether the non-tesla car is in the same garage, a
+		// different garage, or a different country
+		// (idSplitGaragesTeslaPlusBmwSunroof /
+		// idSplitCountriesTeslaPlusBmwSunroof).
 		runLevel(t, className, class,
 			"countries.garages.cars.make", "countries.garages.cars.accessories.type", "countries.garages.cars.tires.width",
 			docs,
-			// today
 			[]strfmt.UUID{
 				idTeslaSunroof205, idTeslaSunroofOnly, idTesla205Only,
-				idTeslaNothingPlusBmwSunroofSameGarage,
-				idTeslaNothingPlusBmw205SameGarage,
-				idSplitGaragesTeslaPlusBmwSunroof,
-				idSplitCountriesTeslaPlusBmwSunroof,
 			},
-			// expected after position-level OR within single root:
-			// []strfmt.UUID{idTeslaSunroof205, idTeslaSunroofOnly,
-			//               idTesla205Only}
-			//   (cross-car docs flip to excl regardless of whether the
-			//   non-tesla car is same garage, different garage, or
-			//   different country.)
 		)
 	})
 }
