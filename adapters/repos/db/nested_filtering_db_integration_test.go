@@ -16237,11 +16237,10 @@ func TestNestedFilteringNotInsideOrInsideAnd3Levels(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		// TODO aliszka:nested_filtering: Shape 1 — NOT operand and OR
-		// siblings all at cars LCA. Today's docID-level OR satisfies
-		// "no 2022 car" via vacuous absence elsewhere; under scope-aware
-		// NOT, OR is per-car: cars where (color=red OR year≠2022),
-		// AND'd with cars.make=tesla at cars.
+		// regression_shape1_NOT_in_OR_same_LCA — NOT operand and OR
+		// siblings all at cars LCA. NOT inverts at cars (year≠2022 per
+		// car); OR per-car: cars where (color=red OR year≠2022). Outer
+		// AND with make=tesla at cars: ∃ tesla car satisfying the OR.
 		t.Run("regression_shape1_NOT_in_OR_same_LCA", func(t *testing.T) {
 			runScenario(t, andF(
 				textF(makePath, "tesla"),
@@ -16252,10 +16251,12 @@ func TestNestedFilteringNotInsideOrInsideAnd3Levels(t *testing.T) {
 			), shape1Want)
 		})
 
-		// TODO aliszka:nested_filtering: Shape 2 — NOT operand at deeper
-		// LCA (cars.tires) than OR's other branch (cars). Under
-		// scope-aware NOT, NOT inverts at cars.tires, projects to cars.
-		// OR per-car: cars where (color=red OR has non-205 tire).
+		// regression_shape2_NOT_in_OR_deeper_LCA — NOT operand at deeper
+		// LCA (cars.tires) than OR's other branch (cars). NOT inverts at
+		// cars.tires per-tire and projects to cars existentially (∃ tire
+		// ≠205). OR per-car: cars where (color=red OR ∃ non-205 tire).
+		// Outer AND with make=tesla at cars: ∃ tesla car satisfying the
+		// OR. Cars with no tires drop the NOT branch (vacuous).
 		t.Run("regression_shape2_NOT_in_OR_deeper_LCA", func(t *testing.T) {
 			runScenario(t, andF(
 				textF(makePath, "tesla"),
@@ -16310,33 +16311,23 @@ func TestNestedFilteringNotInsideOrInsideAnd3Levels(t *testing.T) {
 		runLevel(t, className, class,
 			"cars.make", "cars.color", "cars.year", "cars.tires.width",
 			docs,
-			// Shape 1 today: tesla AND (has red car OR no 2022 car).
+			// Shape 1 — per-car OR: ∃ tesla car (color=red OR year≠2022).
+			// idTeslaBadPlusBmwRed drops (red is on bmw, not tesla);
+			// idTeslaBadPlusGood flips in (cars[1] tesla, year=2018≠2022).
 			[]strfmt.UUID{
 				idTeslaRed2022_205, idTeslaRed2018_225, idTeslaBlue2018_225,
-				idTeslaBadPlusBmwRed, idTeslaMixed, idTeslaBlueNoAttrs,
+				idTeslaBadPlusGood, idTeslaMixed, idTeslaBlueNoAttrs,
 			},
-			// expected after scope-aware NOT (Shape 1):
-			// []strfmt.UUID{idTeslaRed2022_205, idTeslaRed2018_225,
-			//               idTeslaBlue2018_225, idTeslaBadPlusGood,
-			//               idTeslaMixed, idTeslaBlueNoAttrs}
-			//   (idTeslaBadPlusBmwRed flips to excl — no single tesla
-			//   car satisfies (red OR year≠2022); idTeslaBadPlusGood
-			//   flips to match — cars[1] is tesla AND year≠2022.)
 
-			// Shape 2 today: tesla AND (has red car OR no 205 tire).
+			// Shape 2 — per-car OR: ∃ tesla car (color=red OR ∃ non-205
+			// tire). idTeslaBadPlusBmwRed drops; idTeslaBadPlusGood flips
+			// in (cars[1] tesla, tire 225≠205); idTeslaMixed flips in
+			// (tire 225≠205 on the tesla car); idTeslaBlueNoAttrs drops
+			// (no tires for ∃ projection, no red color).
 			[]strfmt.UUID{
 				idTeslaRed2022_205, idTeslaRed2018_225, idTeslaBlue2018_225,
-				idTeslaBadPlusBmwRed, idTeslaBlueNoAttrs,
+				idTeslaBadPlusGood, idTeslaMixed,
 			},
-			// expected after scope-aware NOT (Shape 2):
-			// []strfmt.UUID{idTeslaRed2022_205, idTeslaRed2018_225,
-			//               idTeslaBlue2018_225, idTeslaBadPlusGood,
-			//               idTeslaMixed}
-			//   (idTeslaBadPlusBmwRed flips to excl; idTeslaBadPlusGood
-			//   flips to match — cars[1] is tesla AND has 225 (non-205)
-			//   tire; idTeslaMixed flips to match — cars[0] has both
-			//   tires; idTeslaBlueNoAttrs flips to excl — no tires for
-			//   the NOT-tires projection to qualify.)
 		)
 	})
 
@@ -16390,34 +16381,22 @@ func TestNestedFilteringNotInsideOrInsideAnd3Levels(t *testing.T) {
 		runLevel(t, className, class,
 			"garages.cars.make", "garages.cars.color", "garages.cars.year", "garages.cars.tires.width",
 			docs,
-			// Shape 1 today
+			// Shape 1 — per-car OR: ∃ tesla car (color=red OR year≠2022).
+			// idTeslaBadPlusBmwRed and idSplitAcrossGarages drop (red on
+			// bmw, no good tesla); idTeslaBadPlusGood flips in (cars[1]
+			// tesla, year≠2022).
 			[]strfmt.UUID{
 				idTeslaRed2022_205, idTeslaRed2018_225, idTeslaBlue2018_225,
-				idTeslaBadPlusBmwRed, idTeslaMixed, idTeslaBlueNoAttrs,
-				idSplitAcrossGarages,
+				idTeslaBadPlusGood, idTeslaMixed, idTeslaBlueNoAttrs,
 			},
-			// expected after scope-aware NOT (Shape 1):
-			// []strfmt.UUID{idTeslaRed2022_205, idTeslaRed2018_225,
-			//               idTeslaBlue2018_225, idTeslaBadPlusGood,
-			//               idTeslaMixed, idTeslaBlueNoAttrs}
-			//   (idTeslaBadPlusBmwRed and idSplitAcrossGarages flip to
-			//   excl — no single tesla car satisfies (red OR year≠2022);
-			//   idTeslaBadPlusGood flips to match — cars[1] is tesla AND
-			//   year≠2022.)
 
-			// Shape 2 today
+			// Shape 2 — per-car OR. idTeslaBadPlusBmwRed and
+			// idSplitAcrossGarages drop; idTeslaBadPlusGood and
+			// idTeslaMixed flip in; idTeslaBlueNoAttrs drops (no tires).
 			[]strfmt.UUID{
 				idTeslaRed2022_205, idTeslaRed2018_225, idTeslaBlue2018_225,
-				idTeslaBadPlusBmwRed, idTeslaBlueNoAttrs,
-				idSplitAcrossGarages,
+				idTeslaBadPlusGood, idTeslaMixed,
 			},
-			// expected after scope-aware NOT (Shape 2):
-			// []strfmt.UUID{idTeslaRed2022_205, idTeslaRed2018_225,
-			//               idTeslaBlue2018_225, idTeslaBadPlusGood,
-			//               idTeslaMixed}
-			//   (idTeslaBadPlusBmwRed and idSplitAcrossGarages flip to
-			//   excl; idTeslaBadPlusGood and idTeslaMixed flip to match;
-			//   idTeslaBlueNoAttrs flips to excl — no tires.)
 		)
 	})
 
@@ -16478,32 +16457,21 @@ func TestNestedFilteringNotInsideOrInsideAnd3Levels(t *testing.T) {
 		runLevel(t, className, class,
 			"countries.garages.cars.make", "countries.garages.cars.color", "countries.garages.cars.year", "countries.garages.cars.tires.width",
 			docs,
-			// Shape 1 today
+			// Shape 1 — per-car OR. Split-garages and split-countries
+			// drop (no single tesla car satisfies the OR);
+			// idTeslaBadPlusGood flips in.
 			[]strfmt.UUID{
 				idTeslaRed2022_205, idTeslaRed2018_225, idTeslaBlue2018_225,
-				idTeslaBadPlusBmwRed, idTeslaMixed, idTeslaBlueNoAttrs,
-				idSplitAcrossGarages, idSplitAcrossCountries,
+				idTeslaBadPlusGood, idTeslaMixed, idTeslaBlueNoAttrs,
 			},
-			// expected after scope-aware NOT (Shape 1):
-			// []strfmt.UUID{idTeslaRed2022_205, idTeslaRed2018_225,
-			//               idTeslaBlue2018_225, idTeslaBadPlusGood,
-			//               idTeslaMixed, idTeslaBlueNoAttrs}
-			//   (split docs flip to excl — no single tesla car satisfies
-			//   the OR; idTeslaBadPlusGood flips to match.)
 
-			// Shape 2 today
+			// Shape 2 — per-car OR. Split docs drop;
+			// idTeslaBadPlusGood and idTeslaMixed flip in;
+			// idTeslaBlueNoAttrs drops (no tires).
 			[]strfmt.UUID{
 				idTeslaRed2022_205, idTeslaRed2018_225, idTeslaBlue2018_225,
-				idTeslaBadPlusBmwRed, idTeslaBlueNoAttrs,
-				idSplitAcrossGarages, idSplitAcrossCountries,
+				idTeslaBadPlusGood, idTeslaMixed,
 			},
-			// expected after scope-aware NOT (Shape 2):
-			// []strfmt.UUID{idTeslaRed2022_205, idTeslaRed2018_225,
-			//               idTeslaBlue2018_225, idTeslaBadPlusGood,
-			//               idTeslaMixed}
-			//   (split docs flip to excl; idTeslaBadPlusGood and
-			//   idTeslaMixed flip to match; idTeslaBlueNoAttrs flips to
-			//   excl — no tires.)
 		)
 	})
 }
