@@ -18899,11 +18899,10 @@ func TestNestedFilteringNotContextSensitivity3Levels(t *testing.T) {
 			runScenario(t, notF(colorRedF()), want.standalone)
 		})
 
-		// TODO aliszka:nested_filtering: Context 2 — sibling at SAME
-		// root. Enclosing AND's LCA = cars[]. Today's contribution
-		// of NOT is doc-level. Option A and Option B both invert at
-		// cars[] (operand's natural LCA = enclosing LCA), so they
-		// agree here.
+		// ctx2_AND_same_root_sibling — sibling at SAME root.
+		// Enclosing AND's LCA = cars[]. NOT inverts at cars[]
+		// (operand's natural LCA = enclosing LCA). Option A and
+		// Option B agree here.
 		t.Run("ctx2_AND_same_root_sibling", func(t *testing.T) {
 			runScenario(t, andF(makeF(), notF(colorRedF())), want.andSameRoot)
 		})
@@ -18995,38 +18994,33 @@ func TestNestedFilteringNotContextSensitivity3Levels(t *testing.T) {
 			"cars.make", "cars.year", "cars.color", "owner",
 			docs,
 			wantSet{
-				// ctx1 standalone: NOT_today = no red anywhere.
-				// {d2, d4, d5, d7}.
+				// ctx1 standalone — TODO aliszka:nested_filtering:
+				// locks in CURRENT root-universe NOT.
+				//   Option A: {d2,d4,d5,d6} — d6 in, d7 out.
+				//   Option B: {d2,d4,d5,d7} — same as today (no
+				//             enclosing combinator).
 				standalone: []strfmt.UUID{idTesla2020Blue, idBmw2020Blue, idTesla1990Blue, idEmpty},
-				// ctx2 AND same-root: T ∩ NOT_today = {d2, d5}.
-				andSameRoot: []strfmt.UUID{idTesla2020Blue, idTesla1990Blue},
-				// ctx3 AND outer-scope: O ∩ NOT_today = {d2,d4,d5}.
+				// ctx2 AND same-root — option A and option B agree:
+				// per-cars-element NOT. idMixed (d6) flips in.
+				andSameRoot: []strfmt.UUID{idTesla2020Blue, idTesla1990Blue, idMixed},
+				// ctx3 AND outer-scope — TODO aliszka:nested_filtering:
+				// locks in CURRENT docID-level NOT. THIS is the A vs B
+				// discriminator.
+				//   Option A: {d2,d4,d5,d6} — d6 in.
+				//   Option B: {d2,d4,d5} — same as today (enclosing
+				//             LCA = doc).
 				andOuterScope: []strfmt.UUID{idTesla2020Blue, idBmw2020Blue, idTesla1990Blue},
-				// ctx4 OR same-root: T ∪ NOT_today =
-				// {d1,d2,d4,d5,d6,d7,d8}.
+				// ctx4 OR same-root — TODO aliszka:nested_filtering:
+				// locks in CURRENT root-universe NOT (top-level OR
+				// doesn't trigger scope-aware NOT yet).
+				//   Option A: {d1,d2,d4,d5,d6,d8} — d6 in, d7 out.
+				//   Option B: same as Option A (enclosing OR's LCA =
+				//             cars = operand LCA).
 				orSameRoot: []strfmt.UUID{idTesla2020Red, idTesla2020Blue, idBmw2020Blue, idTesla1990Blue, idMixed, idEmpty, idTesla2020RedOwnerBob},
-				// ctx5 mix: T ∩ (Y ∪ NOT_today) =
-				// {d1,d2,d5,d6,d8}.
+				// ctx5 mix — passes under today, option A, and option B.
+				// The OR positive branch (Y) absorbs the discriminators.
 				andOrMix: []strfmt.UUID{idTesla2020Red, idTesla2020Blue, idTesla1990Blue, idMixed, idTesla2020RedOwnerBob},
 			},
-			// expected after option A (per-element NOT, context-free):
-			//   ctx1: {d2,d4,d5,d6}        — d6 in, d7 out
-			//   ctx2: {d2,d5,d6}           — d6 in
-			//   ctx3: {d2,d4,d5,d6}        — d6 in
-			//   ctx4: {d1,d2,d4,d5,d6,d8}  — d6 in, d7 out
-			//   ctx5: {d1,d2,d5,d6,d8}     — same as today (the
-			//                                 union absorbs the
-			//                                 difference at d2,d4,
-			//                                 d5,d6 since these
-			//                                 appear in Y too)
-			//
-			// expected after option B (NOT at enclosing-scope LCA):
-			//   ctx1: same as today (no enclosing combinator)
-			//   ctx2: same as option A (enclosing LCA = cars[])
-			//   ctx3: same as today (enclosing LCA = doc)
-			//          — THIS is the A vs B discriminator
-			//   ctx4: same as option A
-			//   ctx5: same as option A
 		)
 	})
 
@@ -19089,29 +19083,28 @@ func TestNestedFilteringNotContextSensitivity3Levels(t *testing.T) {
 			"garages.cars.make", "garages.cars.year", "garages.cars.color", "owner",
 			docs,
 			wantSet{
-				// ctx1 standalone NOT_today
+				// ctx1 standalone — TODO aliszka:nested_filtering:
+				// locks in CURRENT root-universe NOT.
+				//   Option A: {d2,d4,d5,d6,d9}.
+				//   Option B: {d2,d4,d5,d7} — same as today.
 				standalone: []strfmt.UUID{idTesla2020Blue, idBmw2020Blue, idTesla1990Blue, idEmpty},
-				// ctx2 T ∩ NOT_today
-				andSameRoot: []strfmt.UUID{idTesla2020Blue, idTesla1990Blue},
-				// ctx3 O ∩ NOT_today
+				// ctx2 AND same-root — option A and option B agree.
+				// idMixedSameGarage and idMixedSplitGarages flip in.
+				andSameRoot: []strfmt.UUID{idTesla2020Blue, idTesla1990Blue, idMixedSameGarage, idMixedSplitGarages},
+				// ctx3 AND outer-scope — TODO aliszka:nested_filtering:
+				// locks in CURRENT docID-level NOT. THIS is the A vs B
+				// discriminator.
+				//   Option A: {d2,d4,d5,d6,d9}.
+				//   Option B: {d2,d4,d5} — same as today.
 				andOuterScope: []strfmt.UUID{idTesla2020Blue, idBmw2020Blue, idTesla1990Blue},
-				// ctx4 T ∪ NOT_today
+				// ctx4 OR same-root — TODO aliszka:nested_filtering:
+				// locks in CURRENT root-universe NOT.
+				//   Option A: {d1,d2,d4,d5,d6,d8,d9}.
+				//   Option B: same as Option A.
 				orSameRoot: []strfmt.UUID{idTesla2020Red, idTesla2020Blue, idBmw2020Blue, idTesla1990Blue, idMixedSameGarage, idEmpty, idTesla2020RedOwnerBob, idMixedSplitGarages},
-				// ctx5 T ∩ (Y ∪ NOT_today)
+				// ctx5 mix — passes under today, option A, and option B.
 				andOrMix: []strfmt.UUID{idTesla2020Red, idTesla2020Blue, idTesla1990Blue, idMixedSameGarage, idTesla2020RedOwnerBob, idMixedSplitGarages},
 			},
-			// expected after option A:
-			//   NOT_optA = exists garages.cars with color!=red =
-			//   {d2,d4,d5,d6,d9} (mixed docs flip IN, idEmpty
-			//   flips OUT).
-			//   ctx1: {d2,d4,d5,d6,d9}
-			//   ctx2: {d2,d5,d6,d9}
-			//   ctx3: {d2,d4,d5,d6,d9}
-			//   ctx4: {d1,d2,d4,d5,d6,d8,d9}
-			//   ctx5: {d1,d2,d5,d6,d8,d9} (same as today)
-			//
-			// option B: ctx1 and ctx3 collapse to today; ctx2/4/5
-			// match option A.
 		)
 	})
 
@@ -19176,30 +19169,32 @@ func TestNestedFilteringNotContextSensitivity3Levels(t *testing.T) {
 			"countries.garages.cars.make", "countries.garages.cars.year", "countries.garages.cars.color", "owner",
 			docs,
 			wantSet{
-				// today T = {d1,d2,d5,d6,d8,d9,d10}
-				// Y = {d1,d2,d3,d4,d6,d8,d9,d10}
-				// O = {d1,d2,d3,d4,d5,d6,d9,d10}
-				// NOT_today = {d2,d4,d5,d7}
-				standalone:    []strfmt.UUID{idTesla2020Blue, idBmw2020Blue, idTesla1990Blue, idEmpty},
-				andSameRoot:   []strfmt.UUID{idTesla2020Blue, idTesla1990Blue},
+				// ctx1 standalone — TODO aliszka:nested_filtering:
+				// locks in CURRENT root-universe NOT.
+				//   Option A: {d2,d4,d5,d6,d9,d10}.
+				//   Option B: {d2,d4,d5,d7} — same as today.
+				standalone: []strfmt.UUID{idTesla2020Blue, idBmw2020Blue, idTesla1990Blue, idEmpty},
+				// ctx2 AND same-root — option A and option B agree.
+				// All mixed-layout docs (same garage, split garages,
+				// split countries) flip in.
+				andSameRoot: []strfmt.UUID{idTesla2020Blue, idTesla1990Blue, idMixedSameGarage, idMixedSplitGarages, idMixedSplitCountries},
+				// ctx3 AND outer-scope — TODO aliszka:nested_filtering:
+				// locks in CURRENT docID-level NOT. THIS is the A vs B
+				// discriminator.
+				//   Option A: {d2,d4,d5,d6,d9,d10}.
+				//   Option B: {d2,d4,d5} — same as today.
 				andOuterScope: []strfmt.UUID{idTesla2020Blue, idBmw2020Blue, idTesla1990Blue},
-				orSameRoot:    []strfmt.UUID{idTesla2020Red, idTesla2020Blue, idBmw2020Blue, idTesla1990Blue, idMixedSameGarage, idEmpty, idTesla2020RedOwnerBob, idMixedSplitGarages, idMixedSplitCountries},
-				andOrMix:      []strfmt.UUID{idTesla2020Red, idTesla2020Blue, idTesla1990Blue, idMixedSameGarage, idTesla2020RedOwnerBob, idMixedSplitGarages, idMixedSplitCountries},
+				// ctx4 OR same-root — TODO aliszka:nested_filtering:
+				// locks in CURRENT root-universe NOT.
+				//   Option A: {d1,d2,d4,d5,d6,d8,d9,d10}.
+				//   Option B: same as Option A.
+				orSameRoot: []strfmt.UUID{idTesla2020Red, idTesla2020Blue, idBmw2020Blue, idTesla1990Blue, idMixedSameGarage, idEmpty, idTesla2020RedOwnerBob, idMixedSplitGarages, idMixedSplitCountries},
+				// ctx5 mix — passes under today, option A, and option B.
+				// Cross-country split docs flip alongside cross-garage
+				// ones — uniformly per-element regardless of where in
+				// the nested chain the mixed elements live.
+				andOrMix: []strfmt.UUID{idTesla2020Red, idTesla2020Blue, idTesla1990Blue, idMixedSameGarage, idTesla2020RedOwnerBob, idMixedSplitGarages, idMixedSplitCountries},
 			},
-			// expected after option A:
-			//   NOT_optA = {d2,d4,d5,d6,d9,d10} (every mixed-layout
-			//   doc flips IN; idEmpty flips OUT).
-			//   ctx1: {d2,d4,d5,d6,d9,d10}
-			//   ctx2: {d2,d5,d6,d9,d10}
-			//   ctx3: {d2,d4,d5,d6,d9,d10}
-			//   ctx4: {d1,d2,d4,d5,d6,d8,d9,d10}
-			//   ctx5: {d1,d2,d5,d6,d8,d9,d10} (same as today)
-			//
-			// option B: ctx1 and ctx3 fall back to today; ctx2/4/5
-			// match option A. The cross-country split docs flip
-			// alongside the cross-garage ones — option A is
-			// uniformly per-element regardless of where in the
-			// nested chain the mixed elements live.
 		)
 	})
 }
