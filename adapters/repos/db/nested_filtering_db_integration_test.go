@@ -14637,10 +14637,10 @@ func TestNestedFilteringNotPin3Levels(t *testing.T) {
 	})
 }
 
-// TestNestedFilteringNotShapeAMultiVsCompound covers gaps #10 and #11
-// for "Shape A": both NOT operands at a deeper LCA than the positive
-// sibling, comparing the multi-NOT form `A AND NOT B AND NOT C`
-// against the compound-NOT form `A AND NOT(B AND C)`.
+// TestNestedFilteringNotShapeAMultiVsCompound covers "Shape A": both
+// NOT operands at a deeper LCA than the positive sibling, comparing
+// the multi-NOT form `A AND NOT B AND NOT C` against the compound-NOT
+// form `A AND NOT(B AND C)`.
 //
 // Filters per level:
 //
@@ -14651,9 +14651,11 @@ func TestNestedFilteringNotPin3Levels(t *testing.T) {
 //	          NOT(<chain>.cars.tires.brand=michelin AND
 //	              <chain>.cars.tires.width=205)
 //
-// By De Morgan, multi ≡ NOT(B OR C) and compound ≡ (NOT B) OR (NOT C),
-// so the two forms produce different results today already, and shift
-// independently under scope-aware NOT.
+// Under scope-aware NOT both forms inherit per-tire semantics (both
+// NOT operands share LCA cars.tires; AND-ing at that LCA forces same-
+// tire correlation). By De Morgan, multi ≡ NOT(B OR C) reads as
+// "∃ tire that is neither michelin nor 205", while compound reads as
+// "∃ tire that is not (michelin AND 205)" — strictly more permissive.
 //
 // Three nesting levels: L0_root_cars, L1_garages_cars (object[]),
 // L2_countries_garages_cars (object[]). Object-root variants are
@@ -14773,13 +14775,10 @@ func TestNestedFilteringNotShapeAMultiVsCompound(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		// TODO aliszka:nested_filtering: multi-NOT form locks in CURRENT
-		// docID-level NOT behavior. Each NOT inverts independently at
-		// docID. Under scope-aware NOT (each NOT inverts at its operand's
-		// LCA = cars.tires, projects up to cars), the form becomes
-		// "tesla cars where (some tire ≠ michelin) AND (some tire ≠ 205)"
-		// — both conditions must hold for a single car (different tires
-		// can satisfy each).
+		// regression_multi_NOT_shapeA — both NOTs share LCA cars.tires,
+		// AND-ing at that LCA forces same-tire correlation. By De Morgan
+		// (multi ≡ NOT(B OR C)) the predicate is "tesla car with
+		// ∃ tire that is neither michelin nor 205".
 		t.Run("regression_multi_NOT_shapeA", func(t *testing.T) {
 			runScenario(t, andF(
 				textF(makePath, "tesla"),
@@ -14788,13 +14787,11 @@ func TestNestedFilteringNotShapeAMultiVsCompound(t *testing.T) {
 			), multiWant)
 		})
 
-		// TODO aliszka:nested_filtering: compound-NOT form locks in CURRENT
-		// behavior. Inner AND is a same-tire correlated AND (tires where
-		// brand=michelin AND width=205). NOT inverts at docID. Under
-		// scope-aware NOT, NOT inverts at the inner AND's LCA =
-		// cars.tires; result becomes "tesla cars with at least one tire
-		// that is NOT (michelin AND 205)" — strictly more permissive
-		// than the multi-NOT form.
+		// regression_compound_NOT_shapeA — inner AND is same-tire
+		// correlated (both operands at cars.tires); NOT inverts at
+		// cars.tires per-tire. Predicate: "tesla car with ∃ tire that
+		// is NOT (michelin AND 205)" — strictly more permissive than
+		// the multi-NOT form.
 		t.Run("regression_compound_NOT_shapeA", func(t *testing.T) {
 			runScenario(t, andF(
 				textF(makePath, "tesla"),
@@ -14844,25 +14841,21 @@ func TestNestedFilteringNotShapeAMultiVsCompound(t *testing.T) {
 		runLevel(t, className, class,
 			"cars.make", "cars.tires.brand", "cars.tires.width",
 			docs,
-			// multi-NOT today: tesla AND no michelin tire AND no 205 tire.
-			[]strfmt.UUID{idTeslaGoodyear100, idTeslaNoTires},
-			// expected after scope-aware NOT (multi):
-			// []strfmt.UUID{idTeslaMixedTires, idTeslaGoodyear100}
-			//   (idTeslaNoTires drops — vacuous; idTeslaMixedTires flips
-			//   to match — tesla car has at least one non-michelin tire
-			//   AND at least one non-205 tire.)
+			// multi — same-tire correlation (De Morgan: NOT(michelin
+			// OR 205) per tire). Only idTeslaGoodyear100's single tire
+			// is neither michelin nor 205. idTeslaMixedTires drops:
+			// tire0 fails ≠michelin, tire1 fails ≠205, no single tire
+			// satisfies both.
+			[]strfmt.UUID{idTeslaGoodyear100},
 
-			// compound-NOT today: tesla AND no (michelin AND 205) tire.
+			// compound — per-tire ∃ NOT(michelin AND 205). All tesla
+			// docs with at least one non-(michelin&205) tire match.
+			// idTeslaSingleMichelin205 (only tire is michelin&205) and
+			// idTeslaNoTires (vacuous) drop.
 			[]strfmt.UUID{
 				idTeslaSingleMichelin, idTeslaSingle205, idTeslaMixedTires,
-				idTeslaGoodyear100, idTeslaNoTires, idTeslaPlusBmw,
+				idTeslaGoodyear100, idTeslaPlusBmw,
 			},
-			// expected after scope-aware NOT (compound):
-			// []strfmt.UUID{idTeslaSingleMichelin, idTeslaSingle205,
-			//               idTeslaMixedTires, idTeslaGoodyear100,
-			//               idTeslaPlusBmw}
-			//   (idTeslaNoTires drops — vacuous, no tire-positions in the
-			//   inverted bitmap.)
 		)
 	})
 
@@ -14911,25 +14904,20 @@ func TestNestedFilteringNotShapeAMultiVsCompound(t *testing.T) {
 		runLevel(t, className, class,
 			"garages.cars.make", "garages.cars.tires.brand", "garages.cars.tires.width",
 			docs,
-			// multi-NOT today
-			[]strfmt.UUID{idTeslaGoodyear100, idTeslaNoTires},
-			// expected after scope-aware NOT (multi):
-			// []strfmt.UUID{idTeslaMixedTires, idTeslaGoodyear100}
-			//   (idTeslaNoTires drops — vacuous; idTeslaMixedTires flips
-			//   to match. Other docs without a single car satisfying both
-			//   non-michelin AND non-205 stay excluded.)
+			// multi — same-tire correlation. Only idTeslaGoodyear100
+			// has a single tire that is neither michelin nor 205.
+			// Splits across garages don't help — no single tesla car
+			// has a tire satisfying both NOTs simultaneously.
+			[]strfmt.UUID{idTeslaGoodyear100},
 
-			// compound-NOT today
+			// compound — per-tire ∃ NOT(michelin AND 205). All tesla
+			// docs with at least one non-(michelin&205) tire match,
+			// including the split-across-garages discriminator.
 			[]strfmt.UUID{
 				idTeslaSingleMichelin, idTeslaSingle205, idTeslaMixedTires,
-				idTeslaGoodyear100, idTeslaNoTires, idTeslaPlusBmwSameGarage,
+				idTeslaGoodyear100, idTeslaPlusBmwSameGarage,
 				idSplitAcrossGarages,
 			},
-			// expected after scope-aware NOT (compound):
-			// []strfmt.UUID{idTeslaSingleMichelin, idTeslaSingle205,
-			//               idTeslaMixedTires, idTeslaGoodyear100,
-			//               idTeslaPlusBmwSameGarage, idSplitAcrossGarages}
-			//   (idTeslaNoTires drops — vacuous.)
 		)
 	})
 
@@ -14985,26 +14973,20 @@ func TestNestedFilteringNotShapeAMultiVsCompound(t *testing.T) {
 		runLevel(t, className, class,
 			"countries.garages.cars.make", "countries.garages.cars.tires.brand", "countries.garages.cars.tires.width",
 			docs,
-			// multi-NOT today
-			[]strfmt.UUID{idTeslaGoodyear100, idTeslaNoTires},
-			// expected after scope-aware NOT (multi):
-			// []strfmt.UUID{idTeslaMixedTires, idTeslaGoodyear100}
-			//   (idTeslaNoTires drops; idTeslaMixedTires flips. Splits
-			//   across garages or countries don't help multi because no
-			//   single car has both non-michelin AND non-205 tires.)
+			// multi — same-tire correlation. Only idTeslaGoodyear100
+			// has a single tire that is neither michelin nor 205.
+			// Splits across garages or countries don't help.
+			[]strfmt.UUID{idTeslaGoodyear100},
 
-			// compound-NOT today
+			// compound — per-tire ∃ NOT(michelin AND 205). All tesla
+			// docs with at least one non-(michelin&205) tire match,
+			// including split-across-garages and split-across-countries
+			// discriminators.
 			[]strfmt.UUID{
 				idTeslaSingleMichelin, idTeslaSingle205, idTeslaMixedTires,
-				idTeslaGoodyear100, idTeslaNoTires, idTeslaPlusBmwSameGarage,
+				idTeslaGoodyear100, idTeslaPlusBmwSameGarage,
 				idSplitAcrossGarages, idSplitAcrossCountries,
 			},
-			// expected after scope-aware NOT (compound):
-			// []strfmt.UUID{idTeslaSingleMichelin, idTeslaSingle205,
-			//               idTeslaMixedTires, idTeslaGoodyear100,
-			//               idTeslaPlusBmwSameGarage,
-			//               idSplitAcrossGarages, idSplitAcrossCountries}
-			//   (idTeslaNoTires drops — vacuous.)
 		)
 	})
 }
