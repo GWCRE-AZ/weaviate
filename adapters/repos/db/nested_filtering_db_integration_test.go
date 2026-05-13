@@ -13418,28 +13418,28 @@ func TestNestedFilteringContainsOperators(t *testing.T) {
 	})
 }
 
-// TestNestedFilteringAndShapeFlatVsAndOfAnd contrasts two AND shapes that
-// are logically equivalent under classical boolean associativity but
-// produce DIFFERENT results in the nested-filter dispatch:
+// TestNestedFilteringAndShapeFlatVsAndOfAnd regression-locks that two
+// associatively-equivalent AND shapes produce the same result after
+// AND-associative flattening (plan_and_associative_flattening):
 //
 //	flat:   AND(f1, f2, f3, f4)
 //	nested: AND(AND(f1, f2), AND(f3, f4))
 //
-// All four leaf filters target the same nested root (cars). The dispatch
-// runs `groupNestedByProp` at each AND level, scoping same-element
-// correlation to that AND's children. Sibling ANDs are then combined at
-// docID level, never crossed.
+// All four leaf filters target the same nested root (cars). The planner's
+// flattenAndOperators unwraps non-tokenization AND wrappers so both shapes
+// collapse to a single recGroupNode with all four leaves at cars LCA →
+// same-element AND: ONE car must satisfy all four.
 //
-// Effect on the same data:
+// Effect on the same data — both shapes:
 //
-//   - Flat: ONE car must satisfy all four leaves.
-//   - Nested: ONE car must satisfy (f1 AND f2); some — possibly different —
-//     car must satisfy (f3 AND f4).
+//   - ONE car must satisfy all four leaves.
 //
-// Verified 2026-05-07. Same root cause family as the OR-in-AND
-// distribution gap (plan_or_in_correlated_and_distribution): correlation
-// doesn't cross combinator boundaries, even associatively-equivalent
-// ones.
+// Pre-flattening (before plan_and_associative_flattening landed), the
+// nested form allowed splits across cars (different cars per inner AND).
+// Flattening removes that footgun: parenthesization no longer scopes
+// same-element correlation. Both subtests now assert the same expected
+// list to prevent accidental re-introduction of parenthesization-as-
+// scoping behaviour.
 func TestNestedFilteringAndShapeFlatVsAndOfAnd(t *testing.T) {
 	const nestedClass = "AndShapeFlatVsAndOfAnd"
 	vTrue := true
@@ -13579,19 +13579,19 @@ func TestNestedFilteringAndShapeFlatVsAndOfAnd(t *testing.T) {
 			[]strfmt.UUID{idAllOneCar})
 	})
 
-	// Nested: AND(AND(f1,f2), AND(f3,f4)) — each inner AND becomes its own
-	// isWithinRootSubtree wrapper at LCA cars. The outer AND combines the two
-	// inner results at docID level. So a doc matches when SOME car has
-	// (make+year) AND SOME — possibly different — car has (color+fuel).
+	// Nested: AND(AND(f1,f2), AND(f3,f4)) — under AND-associative flattening,
+	// flattenAndOperators unwraps the inner AND wrappers and the planner
+	// builds a single recGroupNode with all four leaves at cars LCA. Result
+	// equals the flat form: ONE car must satisfy all four leaves.
 	//
-	// idSplitPairs and idGroupedDiffMakes are the contrast docs: they
-	// match the nested shape but NOT the flat shape, demonstrating that
-	// parenthesization scopes same-element correlation.
-	t.Run("nested_AND_of_AND_allows_split_across_cars", func(t *testing.T) {
+	// idSplitPairs and idGroupedDiffMakes used to match this shape before
+	// flattening landed; under flattening they don't, exactly because
+	// parenthesization no longer scopes same-element correlation.
+	t.Run("nested_AND_of_AND_collapses_to_flat_via_flattening", func(t *testing.T) {
 		runScenario(t, andFilter(
 			andFilter(f1, f2),
 			andFilter(f3, f4),
-		), []strfmt.UUID{idAllOneCar, idSplitPairs, idGroupedDiffMakes})
+		), []strfmt.UUID{idAllOneCar})
 	})
 }
 
