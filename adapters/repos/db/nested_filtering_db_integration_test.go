@@ -20228,14 +20228,12 @@ func TestNestedFilteringAndDeepNotDeepSiblings3Levels(t *testing.T) {
 			return &filters.LocalFilter{Root: &filters.Clause{Operator: filters.OperatorAnd, Operands: ops}}
 		}
 
-		// TODO aliszka:nested_filtering: locks in CURRENT root-
-		// universe NOT combined with same-cars AND across sibling
-		// deep sub-arrays. Today: doc has spoiler accessory anywhere
-		// AND has no tire of width 205 anywhere. Under scope-aware
-		// NOT (operand-LCA), NOT inverts at cars.tires[]: exists
-		// tire with width!=205. Combined with same-cars correlation
-		// under outer AND, doc satisfies iff some single car has
-		// spoiler accessory AND some tire with width!=205.
+		// regression_AND_deep_NOT_deep_sibling_subarrays — A and B at
+		// sibling deep sub-arrays (cars.accessories vs cars.tires).
+		// NOT inverts at cars.tires per-tire (∃ tire≠205), projects to
+		// cars existentially. Positive accessories.type=spoiler projects
+		// to cars existentially. Outer AND same-car at cars: "∃ car
+		// with spoiler accessory AND ∃ non-205 tire on the same car".
 		t.Run("regression_AND_deep_NOT_deep_sibling_subarrays", func(t *testing.T) {
 			db := createTestDatabaseWithClass(t, monitoring.GetMetrics(), class)
 			ctx := context.Background()
@@ -20300,20 +20298,12 @@ func TestNestedFilteringAndDeepNotDeepSiblings3Levels(t *testing.T) {
 		runLevel(t, className, class,
 			"cars.accessories.type", "cars.tires.width",
 			docs,
-			// today: spoiler anywhere AND (no tire of 205
-			// anywhere). Empty/no-tires docs vacuously satisfy
-			// NOT.
-			[]strfmt.UUID{idSpoilerOnly200, idSpoilerNoTires, idSplitSpoilerVs200},
-			// expected after scope-aware NOT + same-cars AND:
-			// []strfmt.UUID{idSpoilerOnly200, idSpoilerMixed}
-			//   - idSpoilerMixed flips IN — single car has
-			//     spoiler AND has tire 200 (≠205) → satisfies
-			//     same-car NOT.
-			//   - idSpoilerNoTires flips OUT — single car has
-			//     spoiler but no tire to satisfy "exists tire
-			//     ≠205".
-			//   - idSplitSpoilerVs200 flips OUT — no single car
-			//     has both spoiler AND a non-205 tire.
+			// scope-aware NOT + same-cars AND.
+			// idSpoilerMixed flips in (single car has spoiler AND
+			// non-205 tire); idSpoilerNoTires flips out (vacuous ∃
+			// tire); idSplitSpoilerVs200 flips out (no single car
+			// has both spoiler AND a non-205 tire).
+			[]strfmt.UUID{idSpoilerOnly200, idSpoilerMixed},
 		)
 	})
 
@@ -20366,12 +20356,10 @@ func TestNestedFilteringAndDeepNotDeepSiblings3Levels(t *testing.T) {
 		runLevel(t, className, class,
 			"garages.cars.accessories.type", "garages.cars.tires.width",
 			docs,
-			// today
-			[]strfmt.UUID{idSpoilerOnly200, idSpoilerNoTires, idSplitSpoilerVs200SameGarage, idSplitSpoilerVs200SplitGarages},
-			// expected after scope-aware NOT + same-cars AND:
-			// []strfmt.UUID{idSpoilerOnly200, idSpoilerMixed}
-			//   (same flips as L0; cross-garage and same-garage
-			//   splits both flip OUT; idSpoilerNoTires flips OUT.)
+			// scope-aware NOT + same-cars AND. idSpoilerMixed flips in.
+			// idSpoilerNoTires, same-garage split, and split-garages all
+			// flip out — no single car has both spoiler AND non-205 tire.
+			[]strfmt.UUID{idSpoilerOnly200, idSpoilerMixed},
 		)
 	})
 
@@ -20434,19 +20422,11 @@ func TestNestedFilteringAndDeepNotDeepSiblings3Levels(t *testing.T) {
 		runLevel(t, className, class,
 			"countries.garages.cars.accessories.type", "countries.garages.cars.tires.width",
 			docs,
-			// today
-			[]strfmt.UUID{
-				idSpoilerOnly200, idSpoilerNoTires,
-				idSplitSpoilerVs200SameGarage,
-				idSplitSpoilerVs200SplitGarages,
-				idSplitSpoilerVs200SplitCountries,
-			},
-			// expected after scope-aware NOT + same-cars AND:
-			// []strfmt.UUID{idSpoilerOnly200, idSpoilerMixed}
-			//   (every cross-cars split — same garage, different
-			//   garages, different countries — flips OUT;
-			//   idSpoilerNoTires flips OUT; idSpoilerMixed flips
-			//   IN.)
+			// scope-aware NOT + same-cars AND. idSpoilerMixed flips in.
+			// Every cross-cars split — same garage, different garages,
+			// different countries — flips out; idSpoilerNoTires flips
+			// out.
+			[]strfmt.UUID{idSpoilerOnly200, idSpoilerMixed},
 		)
 	})
 }
