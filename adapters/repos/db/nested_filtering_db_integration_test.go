@@ -13905,8 +13905,16 @@ func TestNestedFilteringNotInsideAnd3Levels(t *testing.T) {
 
 			// gap #9 — still locks in CURRENT docID-level NOT of
 			// compound AND. TODO aliszka:nested_filtering: under
-			// scope-aware compound NOT, expectation flips per the
-			// docs at the test header.
+			// scope-aware compound NOT (top-level NOT-of-compound),
+			// expectation flips to
+			// []strfmt.UUID{idTeslaNo205, idTeslaNoTires,
+			//               idSplitTeslaBmwSameGarage,
+			//               idTeslaPlusOtherSameGarage, idBmwOnly,
+			//               idSplitAcrossGarages, idTeslaG0PlusOtherG1,
+			//               idTwoTeslasOneSatisfiesG}
+			//   (idEmpty drops — no cars universe; tesla+other-same-
+			//   garage, tesla-g0-plus-other-g1, and two-teslas-one-
+			//   satisfies flip in.)
 			[]strfmt.UUID{
 				idTeslaNo205, idTeslaNoTires, idSplitTeslaBmwSameGarage,
 				idBmwOnly, idEmpty, idSplitAcrossGarages,
@@ -13976,7 +13984,14 @@ func TestNestedFilteringNotInsideAnd3Levels(t *testing.T) {
 			},
 
 			// gap #9 — still locks in CURRENT docID-level NOT of
-			// compound AND.
+			// compound AND. TODO aliszka:nested_filtering: under
+			// scope-aware compound NOT, expectation flips to
+			// []strfmt.UUID{idTeslaNo205, idTeslaNoTires,
+			//               idSplitTeslaBmwSameGarage,
+			//               idTeslaPlusOtherSameGarage, idBmwOnly}
+			//   (idEmptyDoc and idEmptyGarage drop — no cars universe;
+			//   tesla+other-same-garage flips in. No split-across-
+			//   garages variant because the root is a single object.)
 			[]strfmt.UUID{
 				idTeslaNo205, idTeslaNoTires, idSplitTeslaBmwSameGarage,
 				idBmwOnly, idEmptyDoc, idEmptyGarage,
@@ -14055,8 +14070,14 @@ func TestNestedFilteringNotInsideAnd3Levels(t *testing.T) {
 
 			// gap #9 — still locks in CURRENT docID-level NOT of
 			// compound AND. TODO aliszka:nested_filtering: under
-			// scope-aware compound NOT, expectation flips per the
-			// docs at the test header.
+			// scope-aware compound NOT, expectation flips to
+			// []strfmt.UUID{idTeslaNo205, idTeslaNoTires,
+			//               idSplitTeslaBmwSameGarage,
+			//               idTeslaPlusOtherSameGarage, idBmwOnly,
+			//               idSplitAcrossGarages, idSplitAcrossCountries,
+			//               idTwoTeslasAcrossCountries}
+			//   (idEmpty drops; tesla+other-same-garage and
+			//   two-teslas-across-countries flip in.)
 			[]strfmt.UUID{
 				idTeslaNo205, idTeslaNoTires, idSplitTeslaBmwSameGarage,
 				idBmwOnly, idEmpty, idSplitAcrossGarages, idSplitAcrossCountries,
@@ -14136,8 +14157,13 @@ func TestNestedFilteringNotInsideAnd3Levels(t *testing.T) {
 
 			// gap #9 — still locks in CURRENT docID-level NOT of
 			// compound AND. TODO aliszka:nested_filtering: under
-			// scope-aware compound NOT, expectation flips per the
-			// docs at the test header.
+			// scope-aware compound NOT, expectation flips to
+			// []strfmt.UUID{idTeslaNo205, idTeslaNoTires,
+			//               idSplitTeslaBmwSameGarage,
+			//               idTeslaPlusOtherSameGarage, idBmwOnly,
+			//               idSplitAcrossGarages, idTeslaG0PlusOtherG1}
+			//   (idEmptyDoc and idEmptyCountry drop; tesla+other-same-
+			//   garage and tesla-g0-plus-other-g1 flip in.)
 			[]strfmt.UUID{
 				idTeslaNo205, idTeslaNoTires, idSplitTeslaBmwSameGarage,
 				idBmwOnly, idEmptyDoc, idEmptyCountry, idSplitAcrossGarages,
@@ -15819,11 +15845,12 @@ func TestNestedFilteringNotShapeDMultiVsCompound(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		// TODO aliszka:nested_filtering: multi-NOT form with no positive
-		// sibling. Today's docID-level NOT inverts each clause. Under
-		// scope-aware NOT, NOT B inverts at cars; NOT C inverts at
-		// cars.tires (and projects up). AND at cars: cars where color≠red
-		// AND has at least one non-205 tire. Then project to docID.
+		// regression_multi_NOT_shapeD — no positive sibling. NOT B
+		// inverts at cars per-car (color≠red); NOT C inverts at
+		// cars.tires per-tire and projects to cars existentially
+		// (∃ tire≠205). Outer AND same-car at cars: "∃ car with
+		// color≠red AND ∃ non-205 tire on the same car". Cars with no
+		// tires and empty docs drop (vacuous ∃ tire).
 		t.Run("regression_multi_NOT_shapeD", func(t *testing.T) {
 			runScenario(t, andF(
 				notF(textF(colorPath, "red")),
@@ -15831,10 +15858,11 @@ func TestNestedFilteringNotShapeDMultiVsCompound(t *testing.T) {
 			), multiWant)
 		})
 
-		// TODO aliszka:nested_filtering: compound-NOT form. Inner AND has
-		// deepest common LCA = cars. NOT inverts at docID today. Under
-		// scope-aware NOT, NOT inverts at cars: cars where NOT (color=red
-		// AND has 205 tire). Project to docID.
+		// TODO aliszka:nested_filtering: compound-NOT form locks in
+		// CURRENT docID-level NOT of a top-level compound AND (no outer
+		// AND anchor). Under scope-aware top-level NOT-of-compound (not
+		// yet landed), inner AND inverts at cars per-car (cars where
+		// NOT (color=red AND ∃ tire=205)); empty docs drop.
 		t.Run("regression_compound_NOT_shapeD", func(t *testing.T) {
 			runScenario(t, notF(andF(
 				textF(colorPath, "red"),
@@ -15884,25 +15912,24 @@ func TestNestedFilteringNotShapeDMultiVsCompound(t *testing.T) {
 		runLevel(t, className, class,
 			"cars.color", "cars.tires.width",
 			docs,
-			// multi-NOT today: no red car AND no 205 tire (anywhere).
-			[]strfmt.UUID{idBlue225, idBlueNoTires, idEmpty},
-			// expected after scope-aware NOT (multi):
-			// []strfmt.UUID{idBlue225, idBlueMixed, idGoodPlusBad}
-			//   (idBlueNoTires drops — no tire-positions for NOT C
-			//   projection; idEmpty drops — no cars universe;
-			//   idBlueMixed and idGoodPlusBad flip to match — at least
-			//   one car has color≠red AND has non-205 tire.)
+			// multi — same-car AND of (color≠red AND ∃ tire≠205).
+			// idBlueNoTires and idEmpty drop (vacuous ∃ tire);
+			// idBlueMixed and idGoodPlusBad flip in.
+			[]strfmt.UUID{idBlue225, idBlueMixed, idGoodPlusBad},
 
-			// compound-NOT today: no car has (color=red AND has 205).
+			// compound — still locks in CURRENT docID-level NOT of a
+			// top-level compound AND (no outer AND anchor). TODO
+			// aliszka:nested_filtering: under scope-aware top-level
+			// NOT-of-compound (not yet landed), expectation flips to
+			// []strfmt.UUID{idRed225, idBlue205, idBlue225,
+			//               idBlueMixed, idBlueNoTires,
+			//               idGoodPlusBad, idAttrSplit}
+			//   (idEmpty drops — no cars universe; idGoodPlusBad
+			//   flips in — cars[0] not in inner-AND positive set.)
 			[]strfmt.UUID{
 				idRed225, idBlue205, idBlue225, idBlueMixed, idBlueNoTires,
 				idAttrSplit, idEmpty,
 			},
-			// expected after scope-aware NOT (compound):
-			// []strfmt.UUID{idRed225, idBlue205, idBlue225, idBlueMixed,
-			//               idBlueNoTires, idGoodPlusBad, idAttrSplit}
-			//   (idEmpty drops — no cars universe; idGoodPlusBad flips
-			//   to match — cars[0] not in inner-AND positive.)
 		)
 	})
 
@@ -15954,26 +15981,28 @@ func TestNestedFilteringNotShapeDMultiVsCompound(t *testing.T) {
 		runLevel(t, className, class,
 			"garages.cars.color", "garages.cars.tires.width",
 			docs,
-			// multi-NOT today
-			[]strfmt.UUID{idBlue225, idBlueNoTires, idEmpty},
-			// expected after scope-aware NOT (multi):
-			// []strfmt.UUID{idBlue225, idBlueMixed,
-			//               idGoodPlusBadSameGarage,
-			//               idGoodPlusBadSplitGarages}
-			//   (idBlueNoTires and idEmpty drop — vacuous; mixed and
-			//   split docs flip — at least one car has color≠red AND
-			//   non-205 tire.)
+			// multi — same-car AND of (color≠red AND ∃ tire≠205).
+			// idBlueNoTires and idEmpty drop (vacuous ∃ tire);
+			// mixed-tires, good+bad same garage, and good+bad split
+			// garages all flip in.
+			[]strfmt.UUID{
+				idBlue225, idBlueMixed,
+				idGoodPlusBadSameGarage, idGoodPlusBadSplitGarages,
+			},
 
-			// compound-NOT today
+			// compound — still locks in CURRENT docID-level NOT of a
+			// top-level compound AND. TODO aliszka:nested_filtering:
+			// under scope-aware top-level NOT-of-compound, expectation
+			// flips to
+			// []strfmt.UUID{idRed225, idBlue205, idBlue225,
+			//               idBlueMixed, idBlueNoTires,
+			//               idGoodPlusBadSameGarage, idAttrSplit,
+			//               idGoodPlusBadSplitGarages}
+			//   (idEmpty drops; good+bad docs flip in.)
 			[]strfmt.UUID{
 				idRed225, idBlue205, idBlue225, idBlueMixed, idBlueNoTires,
 				idAttrSplit, idEmpty,
 			},
-			// expected after scope-aware NOT (compound):
-			// []strfmt.UUID{idRed225, idBlue205, idBlue225, idBlueMixed,
-			//               idBlueNoTires, idGoodPlusBadSameGarage,
-			//               idAttrSplit, idGoodPlusBadSplitGarages}
-			//   (idEmpty drops; good+bad docs flip.)
 		)
 	})
 
@@ -16032,27 +16061,30 @@ func TestNestedFilteringNotShapeDMultiVsCompound(t *testing.T) {
 		runLevel(t, className, class,
 			"countries.garages.cars.color", "countries.garages.cars.tires.width",
 			docs,
-			// multi-NOT today
-			[]strfmt.UUID{idBlue225, idBlueNoTires, idEmpty},
-			// expected after scope-aware NOT (multi):
-			// []strfmt.UUID{idBlue225, idBlueMixed,
-			//               idGoodPlusBadSameGarage,
+			// multi — same-car AND of (color≠red AND ∃ tire≠205).
+			// idBlueNoTires and idEmpty drop (vacuous ∃ tire);
+			// mixed-tires, good+bad same garage, good+bad split garages,
+			// and good+bad split countries all flip in.
+			[]strfmt.UUID{
+				idBlue225, idBlueMixed,
+				idGoodPlusBadSameGarage,
+				idGoodPlusBadSplitGarages, idGoodPlusBadSplitCountries,
+			},
+
+			// compound — still locks in CURRENT docID-level NOT of a
+			// top-level compound AND. TODO aliszka:nested_filtering:
+			// under scope-aware top-level NOT-of-compound, expectation
+			// flips to
+			// []strfmt.UUID{idRed225, idBlue205, idBlue225,
+			//               idBlueMixed, idBlueNoTires,
+			//               idGoodPlusBadSameGarage, idAttrSplit,
 			//               idGoodPlusBadSplitGarages,
 			//               idGoodPlusBadSplitCountries}
-			//   (idBlueNoTires and idEmpty drop; mixed and split docs
-			//   flip — at least one car has color≠red AND non-205 tire.)
-
-			// compound-NOT today
+			//   (idEmpty drops; good+bad docs flip in.)
 			[]strfmt.UUID{
 				idRed225, idBlue205, idBlue225, idBlueMixed, idBlueNoTires,
 				idAttrSplit, idEmpty,
 			},
-			// expected after scope-aware NOT (compound):
-			// []strfmt.UUID{idRed225, idBlue205, idBlue225, idBlueMixed,
-			//               idBlueNoTires, idGoodPlusBadSameGarage,
-			//               idAttrSplit, idGoodPlusBadSplitGarages,
-			//               idGoodPlusBadSplitCountries}
-			//   (idEmpty drops; good+bad docs flip.)
 		)
 	})
 }
