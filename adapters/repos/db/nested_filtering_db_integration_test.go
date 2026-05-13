@@ -15114,10 +15114,10 @@ func TestNestedFilteringNotShapeBMultiVsCompound(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		// TODO aliszka:nested_filtering: multi-NOT form. Today's docID-level
-		// NOT inverts each clause independently. Under scope-aware NOT,
-		// each NOT inverts at cars (operand LCA = surrounding scope LCA),
-		// giving same-car AND of (tesla AND year≠2020 AND color≠red).
+		// regression_multi_NOT_shapeB — all operands at cars LCA; each
+		// NOT inverts at cars (existential per-car). By De Morgan
+		// (multi ≡ NOT(year=2020 OR color=red)) the predicate is
+		// "∃ tesla car with year≠2020 AND color≠red on the same car".
 		t.Run("regression_multi_NOT_shapeB", func(t *testing.T) {
 			runScenario(t, andF(
 				textF(makePath, "tesla"),
@@ -15126,10 +15126,11 @@ func TestNestedFilteringNotShapeBMultiVsCompound(t *testing.T) {
 			), multiWant)
 		})
 
-		// TODO aliszka:nested_filtering: compound-NOT form. Inner AND is
-		// same-car correlated AND. NOT inverts at docID today. Under
-		// scope-aware NOT, NOT inverts at cars (inner AND's LCA): tesla
-		// cars where NOT (year=2020 AND color=red).
+		// regression_compound_NOT_shapeB — inner AND same-car correlated
+		// at cars; NOT inverts at cars per-car. Predicate: "∃ tesla car
+		// NOT (year=2020 AND color=red)" — strictly more permissive
+		// than multi-NOT (a 2020-but-not-red car or a red-but-not-2020
+		// car satisfies compound but fails multi).
 		t.Run("regression_compound_NOT_shapeB", func(t *testing.T) {
 			runScenario(t, andF(
 				textF(makePath, "tesla"),
@@ -15180,23 +15181,18 @@ func TestNestedFilteringNotShapeBMultiVsCompound(t *testing.T) {
 		runLevel(t, className, class,
 			"cars.make", "cars.year", "cars.color",
 			docs,
-			// multi-NOT today: tesla AND no 2020 AND no red anywhere.
-			[]strfmt.UUID{idTesla2018Blue},
-			// expected after scope-aware NOT (multi):
-			// []strfmt.UUID{idTesla2018Blue, idGoodTeslaPlusBadBmw}
-			//   (idGoodTeslaPlusBadBmw flips to match — cars[0] is tesla
-			//   AND year≠2020 AND color≠red.)
+			// multi — same-car AND of (tesla AND year≠2020 AND color≠red).
+			// idGoodTeslaPlusBadBmw flips in (cars[0] tesla 2018 blue
+			// satisfies all three on the same car).
+			[]strfmt.UUID{idTesla2018Blue, idGoodTeslaPlusBadBmw},
 
-			// compound-NOT today: tesla AND no car has (2020 AND red).
+			// compound — ∃ tesla car NOT (year=2020 AND color=red).
+			// idGoodTeslaPlusBadBmw flips in (cars[0] not in inner-AND
+			// positive set).
 			[]strfmt.UUID{
-				idTesla2020Blue, idTesla2018Red, idTesla2018Blue, idSplitTeslas,
+				idTesla2020Blue, idTesla2018Red, idTesla2018Blue,
+				idGoodTeslaPlusBadBmw, idSplitTeslas,
 			},
-			// expected after scope-aware NOT (compound):
-			// []strfmt.UUID{idTesla2020Blue, idTesla2018Red,
-			//               idTesla2018Blue, idGoodTeslaPlusBadBmw,
-			//               idSplitTeslas}
-			//   (idGoodTeslaPlusBadBmw flips to match — cars[0] not in
-			//   inner-AND positive, in inverted set.)
 		)
 	})
 
@@ -15246,24 +15242,20 @@ func TestNestedFilteringNotShapeBMultiVsCompound(t *testing.T) {
 		runLevel(t, className, class,
 			"garages.cars.make", "garages.cars.year", "garages.cars.color",
 			docs,
-			// multi-NOT today
-			[]strfmt.UUID{idTesla2018Blue},
-			// expected after scope-aware NOT (multi):
-			// []strfmt.UUID{idTesla2018Blue, idGoodTeslaPlusBadBmw,
-			//               idGoodTeslaSplitGarages}
-			//   (idGoodTeslaPlusBadBmw and idGoodTeslaSplitGarages flip —
-			//   each has a tesla car satisfying year≠2020 AND color≠red.)
-
-			// compound-NOT today
+			// multi — same-car AND of (tesla AND year≠2020 AND color≠red).
+			// idGoodTeslaPlusBadBmw and idGoodTeslaSplitGarages flip in
+			// — each has a tesla car satisfying all three.
 			[]strfmt.UUID{
-				idTesla2020Blue, idTesla2018Red, idTesla2018Blue, idSplitTeslas,
+				idTesla2018Blue, idGoodTeslaPlusBadBmw, idGoodTeslaSplitGarages,
 			},
-			// expected after scope-aware NOT (compound):
-			// []strfmt.UUID{idTesla2020Blue, idTesla2018Red,
-			//               idTesla2018Blue, idGoodTeslaPlusBadBmw,
-			//               idSplitTeslas, idGoodTeslaSplitGarages}
-			//   (idGoodTeslaPlusBadBmw and idGoodTeslaSplitGarages flip —
-			//   tesla car not in inner-AND positive, in inverted set.)
+
+			// compound — ∃ tesla car NOT (year=2020 AND color=red).
+			// idGoodTeslaPlusBadBmw and idGoodTeslaSplitGarages flip in
+			// — each has a tesla car outside the inner-AND positive set.
+			[]strfmt.UUID{
+				idTesla2020Blue, idTesla2018Red, idTesla2018Blue,
+				idGoodTeslaPlusBadBmw, idSplitTeslas, idGoodTeslaSplitGarages,
+			},
 		)
 	})
 
@@ -15320,26 +15312,22 @@ func TestNestedFilteringNotShapeBMultiVsCompound(t *testing.T) {
 		runLevel(t, className, class,
 			"countries.garages.cars.make", "countries.garages.cars.year", "countries.garages.cars.color",
 			docs,
-			// multi-NOT today
-			[]strfmt.UUID{idTesla2018Blue},
-			// expected after scope-aware NOT (multi):
-			// []strfmt.UUID{idTesla2018Blue, idGoodTeslaPlusBadBmw,
-			//               idGoodTeslaSplitGarages, idGoodTeslaSplitCountries}
-			//   (the three split-good-tesla docs all flip — each has at
-			//   least one tesla car satisfying all three conditions
-			//   simultaneously.)
-
-			// compound-NOT today
+			// multi — same-car AND of (tesla AND year≠2020 AND color≠red).
+			// All three split-good-tesla docs flip in — each has at
+			// least one tesla car satisfying all three on the same car.
 			[]strfmt.UUID{
-				idTesla2020Blue, idTesla2018Red, idTesla2018Blue, idSplitTeslas,
+				idTesla2018Blue, idGoodTeslaPlusBadBmw,
+				idGoodTeslaSplitGarages, idGoodTeslaSplitCountries,
 			},
-			// expected after scope-aware NOT (compound):
-			// []strfmt.UUID{idTesla2020Blue, idTesla2018Red,
-			//               idTesla2018Blue, idGoodTeslaPlusBadBmw,
-			//               idSplitTeslas, idGoodTeslaSplitGarages,
-			//               idGoodTeslaSplitCountries}
-			//   (split docs flip — at least one tesla car not in
-			//   inner-AND positive.)
+
+			// compound — ∃ tesla car NOT (year=2020 AND color=red).
+			// Split docs flip in — each has at least one tesla car
+			// outside the inner-AND positive set.
+			[]strfmt.UUID{
+				idTesla2020Blue, idTesla2018Red, idTesla2018Blue,
+				idGoodTeslaPlusBadBmw, idSplitTeslas,
+				idGoodTeslaSplitGarages, idGoodTeslaSplitCountries,
+			},
 		)
 	})
 }
