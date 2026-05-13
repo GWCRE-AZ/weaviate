@@ -13752,13 +13752,13 @@ func TestNestedFilteringNotInsideAnd3Levels(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		// TODO aliszka:nested_filtering: locks in CURRENT docID-level NOT
-		// behavior for "<path>.make=tesla AND NOT <path>.tires.width=205".
-		// Under scope-aware NOT (NOT inverts at operand's natural LCA =
-		// <path>.tires), the expected list flips to existential
-		// per-element semantics: doc matches if some tesla car has at
-		// least one non-205 tire (with same-element correlation across
-		// the AND).
+		// regression_gap3_NOT_inside_AND_cross_LCA_siblings —
+		// scope-aware NOT at <path>.tires (operand LCA, existential
+		// per-element) inside same-cars-element AND. Doc matches when
+		// at least one tesla car has at least one non-205 tire.
+		// Tesla-no-tires docs drop (vacuous existential); mixed-tires
+		// and cross-car split docs (tesla(non-205) + bmw(205)) flip
+		// to match.
 		t.Run("regression_gap3_NOT_inside_AND_cross_LCA_siblings", func(t *testing.T) {
 			runScenario(t, andF(
 				textF(makePath, "tesla"),
@@ -13818,21 +13818,19 @@ func TestNestedFilteringNotInsideAnd3Levels(t *testing.T) {
 		runLevel(t, className, class,
 			"cars.make", "cars.tires.width",
 			docs,
-			// gap #3 today
-			[]strfmt.UUID{idTeslaNo205, idTeslaNoTires},
-			// expected after scope-aware NOT:
-			// []strfmt.UUID{idTeslaNo205, idTeslaMixed, idSplitTeslaBmw}
-			//   (idTeslaNoTires drops — vacuous; idTeslaMixed and
-			//   idSplitTeslaBmw flip to match — tesla car has at least one
-			//   non-205 tire.)
+			// gap #3 — scope-aware NOT, existential per-element.
+			// idTeslaNoTires drops (vacuous); idTeslaMixed (mixed
+			// tires on a single tesla car) and idSplitTeslaBmw (tesla
+			// car with non-205 tire) flip to match.
+			[]strfmt.UUID{idTeslaNo205, idTeslaMixed, idSplitTeslaBmw},
 
-			// gap #9 today
+			// gap #9 — still locks in CURRENT docID-level NOT of a
+			// compound AND. TODO aliszka:nested_filtering: under
+			// scope-aware NOT applied to compound operands (not yet
+			// landed), expectation flips to
+			// []strfmt.UUID{idTeslaNo205, idTeslaNoTires,
+			//               idSplitTeslaBmw, idTeslaPlusOther, idBmwOnly}.
 			[]strfmt.UUID{idTeslaNo205, idTeslaNoTires, idSplitTeslaBmw, idBmwOnly, idEmpty},
-			// expected after scope-aware NOT:
-			// []strfmt.UUID{idTeslaNo205, idTeslaNoTires, idSplitTeslaBmw,
-			//               idTeslaPlusOther, idBmwOnly}
-			//   (idEmpty drops — vacuous; idTeslaPlusOther flips to match —
-			//   cars[1] (bmw,225) is in the inverted set.)
 		)
 	})
 
@@ -13895,30 +13893,24 @@ func TestNestedFilteringNotInsideAnd3Levels(t *testing.T) {
 		runLevel(t, className, class,
 			"garages.cars.make", "garages.cars.tires.width",
 			docs,
-			// gap #3 today
-			[]strfmt.UUID{idTeslaNo205, idTeslaNoTires},
-			// expected after scope-aware NOT:
-			// []strfmt.UUID{idTeslaNo205, idTeslaMixed,
-			//               idSplitTeslaBmwSameGarage,
-			//               idSplitAcrossGarages, idTwoTeslasOneSatisfiesG}
-			//   (idTeslaNoTires drops — vacuous; mixed-tires, split-cars,
-			//   split-across-garages, and two-tesla-one-satisfies all flip
-			//   to match — tesla car has at least one non-205 tire.)
+			// gap #3 — scope-aware NOT, existential per-element.
+			// Tesla-no-tires drops (vacuous); mixed-tires,
+			// split-cars-same-garage, split-across-garages, and
+			// two-teslas-one-satisfies all flip to match.
+			[]strfmt.UUID{
+				idTeslaNo205, idTeslaMixed,
+				idSplitTeslaBmwSameGarage,
+				idSplitAcrossGarages, idTwoTeslasOneSatisfiesG,
+			},
 
-			// gap #9 today
+			// gap #9 — still locks in CURRENT docID-level NOT of
+			// compound AND. TODO aliszka:nested_filtering: under
+			// scope-aware compound NOT, expectation flips per the
+			// docs at the test header.
 			[]strfmt.UUID{
 				idTeslaNo205, idTeslaNoTires, idSplitTeslaBmwSameGarage,
 				idBmwOnly, idEmpty, idSplitAcrossGarages,
 			},
-			// expected after scope-aware NOT:
-			// []strfmt.UUID{idTeslaNo205, idTeslaNoTires,
-			//               idSplitTeslaBmwSameGarage,
-			//               idTeslaPlusOtherSameGarage, idBmwOnly,
-			//               idSplitAcrossGarages, idTeslaG0PlusOtherG1,
-			//               idTwoTeslasOneSatisfiesG}
-			//   (idEmpty drops — vacuous; tesla+other-same-garage,
-			//   tesla-g0-plus-other-g1, and two-teslas-one-satisfies flip
-			//   to match — at least one car not in inner-AND positive.)
 		)
 	})
 
@@ -13974,25 +13966,21 @@ func TestNestedFilteringNotInsideAnd3Levels(t *testing.T) {
 		runLevel(t, className, class,
 			"garage.cars.make", "garage.cars.tires.width",
 			docs,
-			// gap #3 today
-			[]strfmt.UUID{idTeslaNo205, idTeslaNoTires},
-			// expected after scope-aware NOT:
-			// []strfmt.UUID{idTeslaNo205, idTeslaMixed,
-			//               idSplitTeslaBmwSameGarage}
-			//   (idTeslaNoTires drops — vacuous; mixed-tires and
-			//   split-cars-same-garage flip to match.)
+			// gap #3 — scope-aware NOT, existential per-element.
+			// Tesla-no-tires drops; mixed-tires and split-cars-same-
+			// garage flip to match. No split-across-garages variant
+			// because the root is a single object, not an array.
+			[]strfmt.UUID{
+				idTeslaNo205, idTeslaMixed,
+				idSplitTeslaBmwSameGarage,
+			},
 
-			// gap #9 today
+			// gap #9 — still locks in CURRENT docID-level NOT of
+			// compound AND.
 			[]strfmt.UUID{
 				idTeslaNo205, idTeslaNoTires, idSplitTeslaBmwSameGarage,
 				idBmwOnly, idEmptyDoc, idEmptyGarage,
 			},
-			// expected after scope-aware NOT:
-			// []strfmt.UUID{idTeslaNo205, idTeslaNoTires,
-			//               idSplitTeslaBmwSameGarage,
-			//               idTeslaPlusOtherSameGarage, idBmwOnly}
-			//   (idEmptyDoc, idEmptyGarage drop — vacuous;
-			//   tesla+other-same-garage flips to match.)
 		)
 	})
 
@@ -14051,36 +14039,28 @@ func TestNestedFilteringNotInsideAnd3Levels(t *testing.T) {
 			{id: idTwoTeslasAcrossCountries, props: wrapC(country(garage(car("tesla", tire(225)))), country(garage(car("tesla", tire(205))))), note: "tesla in both c[0],c[1]; only c[1] has 205 — DISCRIM L2 gap#9"},
 		}
 
-		// Today's expected at L2:
-		// gap #3: tesla AND no 205 anywhere. d2, d4 match.
-		// gap #9: all docs without a (tesla AND has-205) car.
 		runLevel(t, className, class,
 			"countries.garages.cars.make", "countries.garages.cars.tires.width",
 			docs,
-			// gap #3 today
-			[]strfmt.UUID{idTeslaNo205, idTeslaNoTires},
-			// expected after scope-aware NOT:
-			// []strfmt.UUID{idTeslaNo205, idTeslaMixed,
-			//               idSplitTeslaBmwSameGarage,
-			//               idSplitAcrossGarages, idSplitAcrossCountries,
-			//               idTwoTeslasAcrossCountries}
-			//   (idTeslaNoTires drops — vacuous; mixed-tires, split-cars,
-			//   split-across-garages, split-across-countries, and
-			//   two-teslas-across-countries flip to match.)
+			// gap #3 — scope-aware NOT, existential per-element.
+			// Tesla-no-tires drops (vacuous); mixed-tires, split-cars-
+			// same-garage, split-across-garages, split-across-countries,
+			// and two-teslas-across-countries all flip to match.
+			[]strfmt.UUID{
+				idTeslaNo205, idTeslaMixed,
+				idSplitTeslaBmwSameGarage,
+				idSplitAcrossGarages, idSplitAcrossCountries,
+				idTwoTeslasAcrossCountries,
+			},
 
-			// gap #9 today
+			// gap #9 — still locks in CURRENT docID-level NOT of
+			// compound AND. TODO aliszka:nested_filtering: under
+			// scope-aware compound NOT, expectation flips per the
+			// docs at the test header.
 			[]strfmt.UUID{
 				idTeslaNo205, idTeslaNoTires, idSplitTeslaBmwSameGarage,
 				idBmwOnly, idEmpty, idSplitAcrossGarages, idSplitAcrossCountries,
 			},
-			// expected after scope-aware NOT:
-			// []strfmt.UUID{idTeslaNo205, idTeslaNoTires,
-			//               idSplitTeslaBmwSameGarage,
-			//               idTeslaPlusOtherSameGarage, idBmwOnly,
-			//               idSplitAcrossGarages, idSplitAcrossCountries,
-			//               idTwoTeslasAcrossCountries}
-			//   (idEmpty drops — vacuous; tesla+other-same-garage and
-			//   two-teslas-across-countries flip to match.)
 		)
 	})
 
@@ -14144,27 +14124,24 @@ func TestNestedFilteringNotInsideAnd3Levels(t *testing.T) {
 		runLevel(t, className, class,
 			"country.garages.cars.make", "country.garages.cars.tires.width",
 			docs,
-			// gap #3 today
-			[]strfmt.UUID{idTeslaNo205, idTeslaNoTires},
-			// expected after scope-aware NOT:
-			// []strfmt.UUID{idTeslaNo205, idTeslaMixed,
-			//               idSplitTeslaBmwSameGarage, idSplitAcrossGarages}
-			//   (idTeslaNoTires drops — vacuous; mixed-tires, split-cars,
-			//   split-across-garages flip to match.)
+			// gap #3 — scope-aware NOT, existential per-element.
+			// Tesla-no-tires drops (vacuous); mixed-tires, split-cars-
+			// same-garage, and split-across-garages flip to match. No
+			// split-across-countries variant because the root is a
+			// single object, not an array.
+			[]strfmt.UUID{
+				idTeslaNo205, idTeslaMixed,
+				idSplitTeslaBmwSameGarage, idSplitAcrossGarages,
+			},
 
-			// gap #9 today
+			// gap #9 — still locks in CURRENT docID-level NOT of
+			// compound AND. TODO aliszka:nested_filtering: under
+			// scope-aware compound NOT, expectation flips per the
+			// docs at the test header.
 			[]strfmt.UUID{
 				idTeslaNo205, idTeslaNoTires, idSplitTeslaBmwSameGarage,
 				idBmwOnly, idEmptyDoc, idEmptyCountry, idSplitAcrossGarages,
 			},
-			// expected after scope-aware NOT:
-			// []strfmt.UUID{idTeslaNo205, idTeslaNoTires,
-			//               idSplitTeslaBmwSameGarage,
-			//               idTeslaPlusOtherSameGarage, idBmwOnly,
-			//               idSplitAcrossGarages, idTeslaG0PlusOtherG1}
-			//   (idEmptyDoc, idEmptyCountry drop — vacuous;
-			//   tesla+other-same-garage and tesla-g0-plus-other-g1 flip to
-			//   match.)
 		)
 	})
 }
