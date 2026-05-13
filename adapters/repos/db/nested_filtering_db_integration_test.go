@@ -11815,7 +11815,7 @@ func TestNestedFilteringAndOfOrRegression(t *testing.T) {
 	// that same car. The discriminator docs (honda and 205/225 in
 	// different cars) do not match because no single car satisfies both
 	// legs of the AND.
-	t.Run("regression_AND_of_OR_universal_docID_level_simple", func(t *testing.T) {
+	t.Run("regression_AND_of_OR_per_element_simple", func(t *testing.T) {
 		idSameCarMatch := uuid(1)            // [{honda,205}] — both interpretations: match
 		idSameCarMatchAlt := uuid(2)         // [{honda,225}] — both: match
 		idDiscriminatorSplit205 := uuid(3)   // [{honda},{tires:205}] — DISCRIMINATOR
@@ -13793,11 +13793,13 @@ func TestNestedFilteringNotInsideAnd3Levels(t *testing.T) {
 			), gap3Want)
 		})
 
-		// TODO aliszka:nested_filtering: locks in CURRENT docID-level NOT
-		// of a compound correlated AND. Under scope-aware NOT, NOT inverts
-		// at the operand's LCA = the inner AND's deepest common LCA
-		// (= <path's parent>). Doc matches if some element exists at
-		// that LCA that does NOT satisfy the inner AND.
+		// Scope-aware NOT of a compound correlated AND (Phase 5 sub-rule 3).
+		// NOT inverts at the operand's LCA = the inner AND's deepest common
+		// LCA. Doc matches if some element exists at that LCA that does NOT
+		// satisfy the inner AND. L0 lands clean Option A here; at L1+, the
+		// gap9Want lists still carry idTeslaMixed contamination tracked by
+		// project_gap9_multi_element_per_root.md (per-level annotations
+		// reference it).
 		t.Run("regression_gap9_NOT_compound_top_level", func(t *testing.T) {
 			runScenario(t, notF(andF(
 				textF(makePath, "tesla"),
@@ -14326,20 +14328,17 @@ func TestNestedFilteringNotPin3Levels(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		// TODO aliszka:nested_filtering: locks in CURRENT docID-level NOT
-		// behavior for top-level NOT with single arr[N] pin. Under
-		// scope-aware NOT + arr[N] universe restriction, vacuous matches
-		// (docs without the pinned position in their pin-restricted
-		// universe) stop matching.
+		// Scope-aware NOT with single arr[N] pin (Phase 5 sub-rule 3 +
+		// arr[N] universe restriction): pin-restricted universe excludes
+		// docs without the pinned position; vacuous matches drop.
 		t.Run("regression_gap13_NOT_arrN_pin_top_level", func(t *testing.T) {
 			runScenario(t, gap13Docs, notF(textF(makePinPath, "tesla")), gap13Want)
 		})
 
-		// TODO aliszka:nested_filtering: locks in CURRENT docID-level NOT
-		// behavior for top-level NOT with multi-level arr[N] pins. Under
-		// scope-aware NOT + arr[N] universe restriction, the universe is
-		// the slice defined by ALL pins jointly; vacuous matches (docs
-		// missing any pinned position) stop matching.
+		// Scope-aware NOT with multi-level arr[N] pins (Phase 5 sub-rule 3
+		// + multi-level pin universe restriction): universe is the slice
+		// defined by ALL pins jointly; vacuous matches (docs missing any
+		// pinned position) drop.
 		t.Run("regression_gap14_NOT_multi_arrN_pin_top_level", func(t *testing.T) {
 			runScenario(t, gap14Docs, notF(intF(widthPinPath, 205)), gap14Want)
 		})
@@ -15859,10 +15858,8 @@ func TestNestedFilteringNotShapeDMultiVsCompound(t *testing.T) {
 			), multiWant)
 		})
 
-		// TODO aliszka:nested_filtering: compound-NOT form locks in
-		// CURRENT docID-level NOT of a top-level compound AND (no outer
-		// AND anchor). Under scope-aware top-level NOT-of-compound (not
-		// yet landed), inner AND inverts at cars per-car (cars where
+		// Scope-aware top-level NOT-of-compound (Phase 5 sub-rule 3): no
+		// outer AND anchor; inner AND inverts at cars per-car (cars where
 		// NOT (color=red AND ∃ tire=205)); empty docs drop.
 		t.Run("regression_compound_NOT_shapeD", func(t *testing.T) {
 			runScenario(t, notF(andF(
@@ -17549,14 +17546,12 @@ func TestNestedFilteringNotInsideOrSplitVsCompound3Levels(t *testing.T) {
 			), wantSplit)
 		})
 
-		// TODO aliszka:nested_filtering: locks in CURRENT compound-NOT
-		// shape: NOT(make=tesla AND model=s). Inner AND is correlated
-		// on cars (same root). Today NOT inverts at root universe:
-		// doc satisfies when no single cars element has both tesla
-		// AND s. Under scope-aware NOT (operand-LCA on the AND's
-		// root cars[]): exists element where NOT(tesla AND s) =
-		// make!=tesla OR model!=s — collapses to the same per-
-		// element rule as B1.
+		// Scope-aware NOT(make=tesla AND model=s) — Phase 5 sub-rule 3.
+		// Inner AND correlated on cars (same root); NOT inverts at the
+		// operand's LCA = cars[]. Existential per-element: ∃ cars element
+		// where NOT (tesla AND s) — equivalent to make!=tesla OR model!=s
+		// at that cars element. Collapses to the same per-element rule
+		// as B1.
 		t.Run("regression_compound_NOT_outside_correlated_AND", func(t *testing.T) {
 			runScenario(t, notF(andF(
 				textF(makePath, "tesla"),
