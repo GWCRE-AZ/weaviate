@@ -19,7 +19,6 @@ import (
 	"github.com/weaviate/sroar"
 	"github.com/weaviate/weaviate/adapters/repos/db/helpers"
 	invnested "github.com/weaviate/weaviate/adapters/repos/db/inverted/nested"
-	"github.com/weaviate/weaviate/adapters/repos/db/lsmkv"
 	"github.com/weaviate/weaviate/entities/concurrency"
 	"github.com/weaviate/weaviate/entities/filters"
 	filnested "github.com/weaviate/weaviate/entities/filters/nested"
@@ -439,55 +438,6 @@ func (pv *propValuePair) resolveGroupRaw(ctx context.Context, s *Searcher, child
 		return nil, nil, fmt.Errorf("nested correlated AND: execute for %q: %w", pv.prop, err)
 	}
 	return raw, rawRelease, nil
-}
-
-// fetchRootAnchor returns the bitmap of element positions used as the starting
-// universe when all conditions in a correlated group are IsNull=true (no positive
-// anchor). It reads _exists."" from the meta bucket and, if any child carries
-// arr[N] constraints, restricts it to only the specified element positions via
-// restrictByNestedIdx — so that "garages[1].make IS NULL" starts from garage[1]
-// positions only, not all garages.
-func (pv *propValuePair) fetchRootAnchor(s *Searcher, metaBucket *lsmkv.Bucket, children []*propValuePair) (*sroar.Bitmap, func(), error) {
-	rootPositions, rootRelease, err := metaBucket.RoaringSetGet(invnested.ExistsKey(""))
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Find arr[N] constraints from any leaf child (all children in the group share the same key).
-	var arrayIndices []filnested.ArrayIndex
-	for _, child := range children {
-		if child.nested.isNested && len(child.nested.arrayIndices) > 0 {
-			arrayIndices = child.nested.arrayIndices
-			break
-		}
-		for _, gc := range child.children {
-			if len(gc.nested.arrayIndices) > 0 {
-				arrayIndices = gc.nested.arrayIndices
-				break
-			}
-		}
-		if len(arrayIndices) > 0 {
-			break
-		}
-	}
-
-	if len(arrayIndices) == 0 {
-		return rootPositions, rootRelease, nil
-	}
-
-	// Apply arr[N] restriction using a temporary propValuePair that carries only
-	// the array indices — restrictByNestedIdx reads _idx.{relPath}[N] entries.
-	tempPvp := &propValuePair{
-		prop:   pv.prop,
-		nested: nestedInfo{arrayIndices: arrayIndices},
-		Class:  pv.Class,
-	}
-	dbm := &docBitmap{docIDs: rootPositions, release: rootRelease}
-	restricted, err := tempPvp.restrictByNestedIdx(s, dbm)
-	if err != nil {
-		return nil, nil, err
-	}
-	return restricted.docIDs, restricted.release, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -236,10 +236,10 @@ func TestRecGroupExecutorTokenizationAndIsNull(t *testing.T) {
 		runRec(t, s, pv, []uint64{docMatch, docNoMatch})
 	})
 
-	t.Run("isnull_true_only_uses_rootAnchor_seed", func(t *testing.T) {
-		// addresses.city IS NULL — no positives, only an exclude. Normalization
-		// fetches _exists."" as the root anchor, AndNots the city exists set,
-		// then MaskLeaf+MaskRootLeaf to docs.
+	t.Run("isnull_true_standalone_produces_strict_existential_positive", func(t *testing.T) {
+		// addresses.city IS NULL — the only condition. Phase 6.5 materializes
+		// this as a positive: _exists."" AndNot _exists.city restricted to the
+		// leaf's arr[N] pins (none here, so the full root universe).
 		// docMatch: has at least one address (root present) but no city anywhere.
 		// docNoMatch: has at least one address AND a city present somewhere.
 		const (
@@ -262,11 +262,10 @@ func TestRecGroupExecutorTokenizationAndIsNull(t *testing.T) {
 		runRec(t, s, pv, []uint64{docMatch})
 	})
 
-	t.Run("isnull_true_with_arrN_restricts_anchor", func(t *testing.T) {
-		// addresses[1].city IS NULL — no positives, exclude with arr[N]=1.
-		// fetchRootAnchor restricts _exists."" by addresses[1] to only consider
-		// the second address element. Match docs where addresses[1] exists AND
-		// addresses[1] has no city.
+	t.Run("isnull_true_with_arrN_restricts_existential_universe", func(t *testing.T) {
+		// addresses[1].city IS NULL — Phase 6.5 materializes as a positive:
+		// _exists."" AndNot _exists.city, both restricted by addresses[1].
+		// Match docs where addresses[1] exists AND addresses[1] has no city.
 		// docMatch: addresses[1] exists with no city set on it.
 		// docNoMatch: addresses[1] exists and has city set.
 		const (

@@ -33,17 +33,14 @@ type fakeRecFetcher struct {
 	valueByLeaf  map[*propValuePair]*sroar.Bitmap
 	existsByLeaf map[*propValuePair]*sroar.Bitmap
 	existsAtPath map[*propValuePair]map[string]*sroar.Bitmap
-	rootAnchor   *sroar.Bitmap
 
-	valueErr      error
-	existsErr     error
-	rootAnchorErr error
-	failOnLeaf    *propValuePair // when set, fetchValue/fetchExists for this leaf returns errors.New("fake fetch error")
+	valueErr   error
+	existsErr  error
+	failOnLeaf *propValuePair // when set, fetchValue/fetchExists for this leaf returns errors.New("fake fetch error")
 
 	valueCalls        int
 	existsCalls       int
 	existsAtPathCalls int
-	rootAnchorCalls   int
 	releaseCalls      int
 }
 
@@ -90,17 +87,6 @@ func (f *fakeRecFetcher) fetchExistsAtPath(leaf *propValuePair, path string) (*s
 		return nil, nil, fmt.Errorf("fakeRecFetcher: no existsAtPath bitmap for leaf %p path %q", leaf, path)
 	}
 	return bm, func() { f.releaseCalls++ }, nil
-}
-
-func (f *fakeRecFetcher) fetchRootAnchor(_ []*propValuePair) (*sroar.Bitmap, func(), error) {
-	f.rootAnchorCalls++
-	if f.rootAnchorErr != nil {
-		return nil, nil, f.rootAnchorErr
-	}
-	if f.rootAnchor == nil {
-		return nil, nil, fmt.Errorf("fakeRecFetcher: rootAnchor not configured")
-	}
-	return f.rootAnchor, func() { f.releaseCalls++ }, nil
 }
 
 // --- helpers --------------------------------------------------------------
@@ -210,12 +196,9 @@ func TestNormalizeRecGroup(t *testing.T) {
 		assert.Same(t, t1, input.positives[0], "first child stands in as planner key")
 		require.Contains(t, input.rawsByCond, t1)
 		assert.Equal(t, []uint64{3}, input.rawsByCond[t1].ToArray(), "AndAll of all tokens")
-		assert.Empty(t, input.excludePositions)
-		assert.Nil(t, input.rootAnchor)
 
 		assert.Equal(t, 3, f.valueCalls)
 		assert.Equal(t, 0, f.existsCalls)
-		assert.Equal(t, 0, f.rootAnchorCalls)
 
 		// Releases: one per fetch + one for the AndAll combined bitmap.
 		require.Len(t, input.releases, 4)
@@ -239,8 +222,6 @@ func TestNormalizeRecGroup(t *testing.T) {
 		require.Len(t, input.positives, 1)
 		assert.Same(t, t1, input.positives[0])
 		assert.Same(t, raw, input.rawsByCond[t1], "single-token path skips AndAll, returns raw bitmap")
-		assert.Empty(t, input.excludePositions)
-		assert.Nil(t, input.rootAnchor)
 
 		require.Len(t, input.releases, 1, "no AndAll release for single token")
 	})
@@ -277,8 +258,6 @@ func TestNormalizeRecGroup(t *testing.T) {
 		assert.Same(t, postcode, input.positives[1])
 		assert.Equal(t, []uint64{2, 3}, input.rawsByCond[wrapper].ToArray(), "AndAll of grandchildren tokens")
 		assert.Equal(t, []uint64{2, 3}, input.rawsByCond[postcode].ToArray())
-		assert.Empty(t, input.excludePositions)
-		assert.Nil(t, input.rootAnchor)
 
 		assert.Equal(t, 3, f.valueCalls, "2 tokens + 1 sibling leaf")
 	})
@@ -307,8 +286,6 @@ func TestNormalizeRecGroup(t *testing.T) {
 		require.Len(t, input.positives, 1)
 		assert.Same(t, leaf, input.positives[0])
 		assert.Same(t, raw, input.rawsByCond[leaf])
-		assert.Empty(t, input.excludePositions)
-		assert.Nil(t, input.rootAnchor)
 		assert.Equal(t, 1, f.valueCalls)
 		assert.Equal(t, 0, f.existsCalls)
 	})
@@ -327,11 +304,8 @@ func TestNormalizeRecGroup(t *testing.T) {
 		require.Len(t, input.positives, 1)
 		assert.Same(t, leaf, input.positives[0])
 		assert.Same(t, raw, input.rawsByCond[leaf])
-		assert.Empty(t, input.excludePositions)
-		assert.Nil(t, input.rootAnchor)
 		assert.Equal(t, 0, f.valueCalls, "fetchValue not called for IsNull=false")
 		assert.Equal(t, 1, f.existsCalls)
-		assert.Equal(t, 0, f.rootAnchorCalls, "no anchor needed when a positive exists")
 	})
 
 	t.Run("direct_isnull_true_materializes_existential_at_lca_as_positive", func(t *testing.T) {
@@ -357,9 +331,6 @@ func TestNormalizeRecGroup(t *testing.T) {
 		require.Contains(t, input.rawsByCond, isNull)
 		assert.Equal(t, []uint64{30, 32}, input.rawsByCond[isNull].ToArray(),
 			"IsNull=true positive is lcaBM AndNot operandBM (positions of LCA-elements where the field is absent)")
-		assert.Empty(t, input.excludePositions, "IsNull=true no longer routes through excludes")
-		assert.Nil(t, input.rootAnchor)
-		assert.Equal(t, 0, f.rootAnchorCalls, "rootAnchor path is unreachable: IsNull=true always produces a positive")
 		assert.Equal(t, 1, f.existsCalls)
 		assert.Equal(t, 1, f.existsAtPathCalls)
 	})
@@ -381,9 +352,6 @@ func TestNormalizeRecGroup(t *testing.T) {
 		assert.Same(t, isNull, input.positives[0])
 		assert.Equal(t, []uint64{41, 42}, input.rawsByCond[isNull].ToArray(),
 			"existential: positions of LCA-elements where the field is absent")
-		assert.Empty(t, input.excludePositions)
-		assert.Nil(t, input.rootAnchor)
-		assert.Equal(t, 0, f.rootAnchorCalls)
 	})
 
 	t.Run("multiple_isnull_true_each_produces_a_positive", func(t *testing.T) {
@@ -405,9 +373,6 @@ func TestNormalizeRecGroup(t *testing.T) {
 		require.Len(t, input.positives, 2)
 		assert.Equal(t, []uint64{51, 52}, input.rawsByCond[n1].ToArray())
 		assert.Equal(t, []uint64{50, 52}, input.rawsByCond[n2].ToArray())
-		assert.Empty(t, input.excludePositions)
-		assert.Nil(t, input.rootAnchor)
-		assert.Equal(t, 0, f.rootAnchorCalls)
 	})
 
 	t.Run("error_in_value_fetch_releases_already_acquired_bitmaps", func(t *testing.T) {
