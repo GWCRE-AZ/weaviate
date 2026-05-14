@@ -3830,13 +3830,13 @@ func TestNestedFilteringIsNullWithArrNInCorrelatedAnd(t *testing.T) {
 	// ----- Constraint at countries[1] -----
 
 	// 1a: countries[1].name = "germany" AND countries[1].garages.cars.model IS NULL
-	// TODO aliszka:nested_filtering: this asserts CURRENT universal IsNull
-	// semantics on the deep path `countries[1].garages.cars.model`. When
-	// the planned existential IsNull rewrite lands, expectations flip:
-	// idMatchNoGarages/idMatchEmptyGarages/idMatchGarageNoCars STOP
-	// matching (vacuous matches go away); idNoMatchModelInOtherGarage
-	// STARTS matching (cross-garage absent satisfies existential). Could
-	// also be obviated by explicit ANY/ALL/NONE quantifiers.
+	//
+	// Phase 6.1 Option A: existential per-element at operand LCA
+	// (countries[1].garages.cars). Vacuous-true preserved (no elements at
+	// LCA → match). Note: idNoMatchModelInOtherGarage is mis-named — under
+	// Option A it matches because garages[0].cars[0] lacks model. See
+	// plan_explicit_array_quantifiers.md for the future explicit
+	// ANY/ALL/NONE alternative.
 	t.Run("regression_1a_countries_value_and_isNull_cars_model", func(t *testing.T) {
 		idMatch := uuid(1)
 		idMatchNoGarages := uuid(2)
@@ -4285,21 +4285,24 @@ func TestNestedFilteringIsNullWithArrNInCorrelatedAnd(t *testing.T) {
 	// ----- Constraint at countries.garages[1] -----
 
 	// 3a: countries.garages[1].city = "berlin" AND countries.garages[1].cars.model IS NULL
-	// TODO aliszka:nested_filtering: this asserts CURRENT universal IsNull
-	// semantics on the deep path `countries.garages[1].cars.model`. When
-	// the planned existential IsNull rewrite lands, vacuous matches
-	// (no cars / no model anywhere) are removed and cross-car-with-model
-	// matches are added. A missing discriminator doc should be added at
-	// that time.
+	//
+	// Phase 6.1 Option A: existential per-element at operand LCA (cars
+	// within pinned garages[1]). L1 version of 1a; the pin moves one level
+	// deeper. idMatchTwoCarsOneWithModel is the L1 analog of 1a's
+	// cross-element discriminator: garages[1] holds two cars, one missing
+	// model, one with model — Option A matches because the no-model car
+	// satisfies the existential. See plan_explicit_array_quantifiers.md
+	// for the future explicit ANY/ALL/NONE alternative.
 	t.Run("regression_3a_garages_value_and_isNull_cars_model", func(t *testing.T) {
 		idMatchMinimal := uuid(1)
 		idMatchNoCars := uuid(2)
 		idMatchEmptyCars := uuid(3)
 		idMatchModelOnlyInG0 := uuid(4)
-		idNoMatchModelInG1 := uuid(5)
-		idNoMatchWrongCity := uuid(6)
-		idNoMatchBerlinAtG0 := uuid(7)
-		idAbsentG1Empty := uuid(8)
+		idMatchTwoCarsOneWithModel := uuid(5)
+		idNoMatchModelInG1 := uuid(6)
+		idNoMatchWrongCity := uuid(7)
+		idNoMatchBerlinAtG0 := uuid(8)
+		idAbsentG1Empty := uuid(9)
 
 		docs := []docDef{
 			{id: idMatchMinimal, countries: []any{map[string]any{"garages": asArr(
@@ -4318,6 +4321,13 @@ func TestNestedFilteringIsNullWithArrNInCorrelatedAnd(t *testing.T) {
 				map[string]any{"city": "munich", "cars": asArr(car("make", "x", "model", "y"))},
 				map[string]any{"city": "berlin", "cars": asArr(car("make", "x"))},
 			)}}, note: "model only in garages[0]; garages[1] has no model → match (IsNull restricted to garages[1])"},
+			{id: idMatchTwoCarsOneWithModel, countries: []any{map[string]any{"garages": asArr(
+				map[string]any{"city": "munich"},
+				map[string]any{"city": "berlin", "cars": asArr(
+					car("make", "x"),
+					car("make", "y", "model", "z"),
+				)},
+			)}}, note: "garages[1] has two cars; cars[0] lacks model → match (∃ car in garages[1] without model)"},
 			{id: idNoMatchModelInG1, countries: []any{map[string]any{"garages": asArr(
 				map[string]any{"city": "munich"},
 				map[string]any{"city": "berlin", "cars": asArr(car("make", "x", "model", "y"))},
@@ -4340,7 +4350,7 @@ func TestNestedFilteringIsNullWithArrNInCorrelatedAnd(t *testing.T) {
 			valueFilter("countries.garages[1].city", "berlin"),
 			isNullFilter("countries.garages[1].cars.model", true),
 		)
-		runScenario(t, docs, filter, []strfmt.UUID{idMatchMinimal, idMatchNoCars, idMatchEmptyCars, idMatchModelOnlyInG0})
+		runScenario(t, docs, filter, []strfmt.UUID{idMatchMinimal, idMatchNoCars, idMatchEmptyCars, idMatchModelOnlyInG0, idMatchTwoCarsOneWithModel})
 	})
 
 	// 3b: countries.garages[1].city = "berlin" AND countries.garages[1].cars IS NULL
@@ -4528,10 +4538,10 @@ func TestNestedFilteringIsNullWithArrNInCorrelatedAnd(t *testing.T) {
 	// ----- Constraint at countries.garages.cars[1] -----
 
 	// 5: cars[1].make = "honda" AND cars[1].model IS NULL
-	// TODO aliszka:nested_filtering: this asserts CURRENT universal IsNull
-	// semantics on the deep path `cars[1].model`. When the planned
-	// existential IsNull rewrite lands, expectations flip — vacuous
-	// matches removed, cross-element absent matches added.
+	//
+	// Pin equals operand parent (cars[1] pins down a single element and
+	// IsNull is on that element's model field). No cross-element semantics
+	// applies — the pin restricts universe and operand to one element.
 	t.Run("regression_5_cars_value_and_isNull_model", func(t *testing.T) {
 		idMatchMinimal := uuid(1)
 		idMatchExtraCar := uuid(2)
