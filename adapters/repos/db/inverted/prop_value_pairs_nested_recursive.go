@@ -24,23 +24,30 @@ import (
 )
 
 // recGroupInput is the normalized form fed to the recursive plan + executor.
-// Tokenization wrappers have been collapsed into single virtual leaves, IsNull
-// has been split into positives (existence) and excludes (absence), and the
-// rootAnchor seed is set when the group has only excludes.
+// Tokenization wrappers have been collapsed into single virtual leaves; IsNull
+// leaves are materialized as strict-existential positives at their operand
+// LCA (Phase 6.5). The excludePositions / excludeLeaves / rootAnchor fields
+// are unreachable post-Phase-6.5 — kept for the executor's API surface; a
+// follow-up cleanup will remove them along with the corresponding executor
+// machinery.
 type recGroupInput struct {
 	// positives are the *propValuePair entries the recursive planner consumes
 	// as logical leaves. Each entry has a corresponding rawsByCond bitmap.
 	positives []*propValuePair
 	// rawsByCond maps each positive to its raw position bitmap. For a
 	// tokenization wrapper the bitmap is the AndAll of all token bitmaps.
+	// For an IsNull=true leaf the bitmap is _exists.{operandLCA} AndNot
+	// _exists.{relPath} (strict-existential at the operand LCA).
 	rawsByCond map[*propValuePair]*sroar.Bitmap
-	// excludePositions holds raw _exists.{path} bitmaps for IsNull=true leaves.
-	// excludeLeaves[i] is the leaf the i-th bitmap was fetched for; its relPath
-	// drives the deepest-object[]-LCA computation in buildRecGroupExecutor.
+	// excludePositions / excludeLeaves: DEAD post-Phase-6.5. Previously held
+	// raw _exists.{path} bitmaps for IsNull=true leaves; now those leaves
+	// route directly to positives. Fields retained until executor exclude
+	// machinery is removed in a follow-up cleanup.
 	excludePositions []*sroar.Bitmap
 	excludeLeaves    []*propValuePair
-	// rootAnchor is the seed bitmap for the no-positive case. Set when
-	// positives is empty and excludePositions is non-empty.
+	// rootAnchor: DEAD post-Phase-6.5. Previously seeded the no-positive
+	// case (excludes only); IsNull=true no longer produces excludes so the
+	// no-positive case is unreachable for normal IsNull groups.
 	rootAnchor *sroar.Bitmap
 	// releases holds cleanup callbacks for every bitmap acquired by the
 	// normalizer (raw positions, AndAll temporaries, anchor reads). The caller
@@ -60,6 +67,11 @@ type recBitmapFetcher interface {
 	// arr[N] indices on the leaf. Used for both IsNull=false (positive leaf)
 	// and IsNull=true (exclude bitmap).
 	fetchExists(leaf *propValuePair) (*sroar.Bitmap, func(), error)
+	// fetchExistsAtPath returns the raw _exists.{path} bitmap, restricted by
+	// the leaf's arr[N] indices. Used to materialize strict-existential IsNull
+	// inside correlated AND: caller AndNots _exists.{relPath} from
+	// _exists.{operandLCA} to obtain "∃ LCA-element without the operand."
+	fetchExistsAtPath(leaf *propValuePair, path string) (*sroar.Bitmap, func(), error)
 	// fetchRootAnchor returns the _exists."" bitmap restricted by any arr[N]
 	// indices visible across the whole group (the first arr[N] found on any
 	// leaf or grandchild). Used as the seed when the group has no positives.
@@ -132,7 +144,7 @@ func normalizeRecGroup(
 	//     recOrNode / recNotNode / nested recGroupNode as needed.
 	for _, child := range children {
 		if child.nested.isNested {
-			if err := routeDirectLeaf(ctx, child, fetcher, input); err != nil {
+			if err := routeDirectLeaf(ctx, child, fetcher, bitmapOps, input); err != nil {
 				return nil, err
 			}
 			continue
@@ -175,9 +187,16 @@ func normalizeRecGroup(
 }
 
 // routeDirectLeaf classifies a single isNested child and appends to the right
-// slice on input. IsNull=true → excludes; IsNull=false → positive existence
-// leaf; everything else → positive value leaf.
-func routeDirectLeaf(ctx context.Context, leaf *propValuePair, fetcher recBitmapFetcher, input *recGroupInput) error {
+// slice on input. IsNull=true → strict-existential positive (∃ LCA-element
+// without operand, materialized as _exists.{operandLCA} AndNot
+// _exists.{relPath}); IsNull=false → positive existence leaf; everything else
+// → positive value leaf.
+//
+// The strict-existential materialization aligns correlated-AND IsNull with
+// the standalone fetchNestedIsNull path: docs whose operand LCA is empty for
+// the pinned scope no longer match vacuously — they must have at least one
+// element at LCA where the operand is missing.
+func routeDirectLeaf(ctx context.Context, leaf *propValuePair, fetcher recBitmapFetcher, bitmapOps *invnested.BitmapOps, input *recGroupInput) error {
 	if leaf.operator == filters.OperatorIsNull {
 		bm, rel, err := fetcher.fetchExists(leaf)
 		if err != nil {
@@ -186,8 +205,19 @@ func routeDirectLeaf(ctx context.Context, leaf *propValuePair, fetcher recBitmap
 		input.releases = append(input.releases, rel)
 		isAbsent := len(leaf.value) > 0 && leaf.value[0] == 0x01
 		if isAbsent {
-			input.excludePositions = append(input.excludePositions, bm)
-			input.excludeLeaves = append(input.excludeLeaves, leaf)
+			lca, err := leaf.isNullOperandLCA()
+			if err != nil {
+				return fmt.Errorf("normalizeRecGroup: compute LCA for IsNull %q: %w", leaf.nested.relPath, err)
+			}
+			lcaBm, lcaRel, err := fetcher.fetchExistsAtPath(leaf, lca)
+			if err != nil {
+				return fmt.Errorf("normalizeRecGroup: fetch exists at LCA %q for IsNull on %q: %w", lca, leaf.nested.relPath, err)
+			}
+			input.releases = append(input.releases, lcaRel)
+			existential, existRel := bitmapOps.AndNot(lcaBm, bm, concurrency.SROAR_MERGE)
+			input.releases = append(input.releases, existRel)
+			input.positives = append(input.positives, leaf)
+			input.rawsByCond[leaf] = existential
 			return nil
 		}
 		input.positives = append(input.positives, leaf)
@@ -320,6 +350,26 @@ func (f *searcherBitmapFetcher) fetchValue(ctx context.Context, leaf *propValueP
 
 func (f *searcherBitmapFetcher) fetchExists(leaf *propValuePair) (*sroar.Bitmap, func(), error) {
 	return leaf.fetchNestedExistsPositions(f.s)
+}
+
+func (f *searcherBitmapFetcher) fetchExistsAtPath(leaf *propValuePair, path string) (*sroar.Bitmap, func(), error) {
+	metaBucket := f.s.store.Bucket(helpers.BucketNestedMetaFromPropNameLSM(leaf.prop))
+	if metaBucket == nil {
+		return nil, nil, fmt.Errorf("fetchExistsAtPath: meta bucket for %q not found", leaf.prop)
+	}
+	positions, release, err := metaBucket.RoaringSetGet(invnested.ExistsKey(path))
+	if err != nil {
+		return nil, nil, fmt.Errorf("fetchExistsAtPath: read exists key %q for %q: %w", path, leaf.prop, err)
+	}
+	if len(leaf.nested.arrayIndices) == 0 {
+		return positions, release, nil
+	}
+	dbm := &docBitmap{docIDs: positions, release: release}
+	restricted, err := leaf.restrictByNestedIdx(f.s, dbm)
+	if err != nil {
+		return nil, nil, err
+	}
+	return restricted.docIDs, restricted.release, nil
 }
 
 func (f *searcherBitmapFetcher) fetchRootAnchor(children []*propValuePair) (*sroar.Bitmap, func(), error) {

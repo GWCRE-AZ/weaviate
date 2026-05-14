@@ -197,17 +197,19 @@ func TestRecGroupExecutorTokenizationAndIsNull(t *testing.T) {
 		runRec(t, s, pv, []uint64{docMatch})
 	})
 
-	t.Run("isnull_true_with_positive_excludes_at_raw_level", func(t *testing.T) {
+	t.Run("isnull_true_strict_existential_at_operand_lca", func(t *testing.T) {
 		// addresses.postcode = "10115" AND addresses.city IS NULL.
 		// docMatch: postcode=10115 at leaf 1, no city anywhere.
 		// docNoMatch: postcode=10115 at leaf 1, city exists at leaf 2 (a
 		// different address than the postcode hit).
 		//
-		// Phase 2 per-element IsNull: AndNot at raw level subtracts only
-		// positions where city exists AT THE SAME LEAF as postcode. doc2's
-		// city is at leaf 2 (a different address element) so the postcode
-		// position at leaf 1 survives — both docs match. Pre-Phase 2 used
-		// universal-at-rootDoc semantics, dropping doc2 entirely.
+		// Phase 6.5 strict-existential: IsNull on a top-level addresses
+		// sub-field has operand LCA "" (root). The IsNull leaf materializes
+		// as _exists."" AndNot _exists.city, restricted to the leaf's
+		// arr[N] pins. Both docs have an address-element without city
+		// (docNoMatch has addr[0] without city; addr[1] has city), so the
+		// existential bitmap is non-empty for both. Combined with the
+		// postcode=10115 positive at addr[0], both docs match.
 		const (
 			docMatch   = uint64(51)
 			docNoMatch = uint64(52)
@@ -220,6 +222,10 @@ func TestRecGroupExecutorTokenizationAndIsNull(t *testing.T) {
 		vb := store.Bucket(valueBucket)
 		mb := store.Bucket(metaBucket)
 		writeNestedValue(t, vb, "postcode", "10115", []uint64{enc(1, 1, docMatch), enc(1, 1, docNoMatch)})
+		// Phase 6.5 requires _exists."" to be populated: existential =
+		// _exists."" AndNot _exists.{operand}. Both docs have addr[0];
+		// docNoMatch also has addr[1] (where city lives).
+		writeExistsAt(t, mb, "", []uint64{enc(1, 1, docMatch), enc(1, 1, docNoMatch), enc(1, 2, docNoMatch)})
 		// Only docNoMatch has a city present anywhere.
 		writeExistsAt(t, mb, "city", []uint64{enc(1, 2, docNoMatch)})
 
